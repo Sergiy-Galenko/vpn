@@ -11,6 +11,7 @@ It can:
 - start, stop, and restart the VPN service
 - list saved clients
 - show recently connected clients
+- run as a desktop GUI application built with Python
 - store client data in SQLite
 - run from Python code or terminal commands
 
@@ -18,16 +19,20 @@ It can:
 
 ```text
 .
+├── assets/
+│   └── wireguard_control_room_logo.svg
 ├── configs/
 │   ├── clients/
 │   ├── keys/
 │   └── server/
 ├── data/
 ├── tests/
+│   ├── test_gui_app.py
 │   └── test_wireguard_manager.py
 ├── src/
 │   ├── __init__.py
 │   ├── config.py
+│   ├── gui_app.py
 │   ├── main.py
 │   ├── models.py
 │   ├── storage.py
@@ -68,12 +73,18 @@ It can:
 
 4. Edit `.env` and set `WG_ENDPOINT` to your Ubuntu server public IP or DNS name.
 
-## Run the CLI menu
+## Run the desktop app
 
-Use the interactive menu:
+Running `main.py` without a command now opens the desktop design by default:
 
 ```bash
 python3 -m src.main
+```
+
+You can also open it explicitly:
+
+```bash
+python3 -m src.main gui
 ```
 
 Use root for install and service management:
@@ -81,6 +92,16 @@ Use root for install and service management:
 ```bash
 sudo python3 -m src.main
 ```
+
+## Run the CLI menu
+
+Open the terminal menu explicitly:
+
+```bash
+python3 -m src.main menu
+```
+
+The GUI is a Python `tkinter` desktop app and uses the same backend manager as the CLI. Service actions still require Ubuntu and root privileges.
 
 ## Terminal commands
 
@@ -140,6 +161,7 @@ sudo python3 -m src.main restart-vpn
 - Client config files: `configs/clients/<client-name>.conf`
 - Server keys: `configs/keys/server_private.key` and `configs/keys/server_public.key`
 - Client private keys: `configs/keys/clients/<client-name>.key`
+- SVG logo: `assets/wireguard_control_room_logo.svg`
 
 During root operations on Ubuntu, the generated server config is also copied to `/etc/wireguard/wg0.conf` by default.
 

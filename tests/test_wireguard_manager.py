@@ -113,7 +113,7 @@ class WireGuardManagerTests(unittest.TestCase):
         self.assertFalse(Path(f"{self.config.system_server_config}.bak").exists())
 
     def test_storage_schema_uses_private_key_path_instead_of_private_key(self) -> None:
-        with self.storage._connect() as connection:
+        with self.storage._connection() as connection:
             columns = self.storage._get_client_columns(connection)
 
         self.assertIn("private_key_path", columns)

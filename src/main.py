@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import tkinter as tk
 from datetime import datetime, timezone
 
 if __package__ in {None, ""}:
@@ -45,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("start-vpn", help="Start the WireGuard service.")
     subparsers.add_parser("stop-vpn", help="Stop the WireGuard service.")
     subparsers.add_parser("restart-vpn", help="Restart the WireGuard service.")
+    subparsers.add_parser("gui", help="Open the desktop GUI application.")
+    subparsers.add_parser("app", help="Alias for the desktop GUI application.")
     return parser
 
 
@@ -155,7 +158,7 @@ def run_interactive_menu(manager: WireGuardManager) -> int:
 def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
     """Execute a subcommand or open the interactive menu by default."""
 
-    command = args.command or "menu"
+    command = args.command or "gui"
 
     if command == "menu":
         return run_interactive_menu(manager)
@@ -189,6 +192,18 @@ def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
     if command == "restart-vpn":
         manager.restart_vpn()
         print("VPN restarted.")
+        return 0
+    if command in {"gui", "app"}:
+        from src.gui_app import run_gui_app
+
+        try:
+            run_gui_app(manager)
+        except tk.TclError as exc:
+            raise VPNManagerError(
+                "The desktop UI could not be started. "
+                "If you are on a server without a graphical session, use the CLI menu instead:\n"
+                "python3 src/main.py menu"
+            ) from exc
         return 0
 
     raise VPNManagerError(f"Unknown command: {command}")
