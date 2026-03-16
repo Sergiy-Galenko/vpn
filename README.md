@@ -23,6 +23,8 @@ It can:
 │   ├── keys/
 │   └── server/
 ├── data/
+├── tests/
+│   └── test_wireguard_manager.py
 ├── src/
 │   ├── __init__.py
 │   ├── config.py
@@ -137,8 +139,11 @@ sudo python3 -m src.main restart-vpn
 - Local server config: `configs/server/wg0.conf`
 - Client config files: `configs/clients/<client-name>.conf`
 - Server keys: `configs/keys/server_private.key` and `configs/keys/server_public.key`
+- Client private keys: `configs/keys/clients/<client-name>.key`
 
 During root operations on Ubuntu, the generated server config is also copied to `/etc/wireguard/wg0.conf` by default.
+
+SQLite stores client metadata only. Client private keys are kept in `configs/keys/clients/` with `0600` file permissions instead of being stored in the database.
 
 ## How connected clients are detected
 
@@ -152,7 +157,7 @@ from src.storage import ClientStorage
 from src.wireguard_manager import WireGuardManager
 
 config = load_config()
-storage = ClientStorage(config.database_path)
+storage = ClientStorage(config.database_path, config.client_private_keys_dir)
 manager = WireGuardManager(config, storage)
 
 manager.create_server_config()
@@ -165,4 +170,9 @@ print(client.config_path)
 - Run install and service actions on Ubuntu, not macOS or Windows.
 - `add-client` requires the `wg` command to exist because key generation uses WireGuard tools.
 - Client config files contain private keys, so keep them secure.
-# vpn
+
+## Run tests
+
+```bash
+python3 -m unittest discover -s tests
+```

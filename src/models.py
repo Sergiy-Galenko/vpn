@@ -14,8 +14,8 @@ class ClientRecord:
     name: str
     address: str
     public_key: str
-    private_key: str
     config_path: str
+    private_key_path: str
     created_at: str
 
 

@@ -13,6 +13,7 @@ from src.utils import (
     ensure_linux,
     ensure_root,
     is_root,
+    replace_file_atomically,
     run_command,
     utc_now_iso,
     validate_client_name,
@@ -32,6 +33,7 @@ class WireGuardManager:
         self.config.server_configs_dir.mkdir(parents=True, exist_ok=True)
         self.config.client_configs_dir.mkdir(parents=True, exist_ok=True)
         self.config.keys_dir.mkdir(parents=True, exist_ok=True)
+        self.config.client_private_keys_dir.mkdir(parents=True, exist_ok=True)
         self.storage.initialize()
 
     @property
@@ -56,7 +58,6 @@ class WireGuardManager:
         run_command(["apt-get", "install", "-y", "wireguard", "wireguard-tools"])
         self.enable_ip_forwarding()
         self.ensure_server_keys()
-        self.create_server_config()
         self.sync_server_config()
         run_command(["systemctl", "enable", self.service_name])
 
@@ -145,16 +146,14 @@ class WireGuardManager:
         self.logger.info("Local server config written to %s", self.config.server_config_path)
         return self.config.server_config_path
 
-    def sync_server_config(self) -> None:
+    def sync_server_config(self, local_config_path: Path | None = None) -> None:
         """Copy the generated local server config into /etc/wireguard."""
 
         ensure_linux()
         ensure_root()
 
-        local_config = self.create_server_config()
-        self.config.system_server_config.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(local_config, self.config.system_server_config)
-        self.config.system_server_config.chmod(0o600)
+        local_config = local_config_path or self.create_server_config()
+        replace_file_atomically(local_config, self.config.system_server_config)
         self.logger.info("Server config synced to %s", self.config.system_server_config)
 
     def add_client(self, name: str) -> ClientRecord:
@@ -168,12 +167,13 @@ class WireGuardManager:
         _, server_public_key = self.ensure_server_keys()
         client_address = self._allocate_client_address()
         client_config_path = self.config.client_configs_dir / f"{client_name}.conf"
+        private_key_path = self.config.client_private_keys_dir / f"{client_name}.key"
         client = ClientRecord(
             name=client_name,
             address=client_address,
             public_key=public_key,
-            private_key=private_key,
             config_path=str(client_config_path),
+            private_key_path=str(private_key_path),
             created_at=utc_now_iso(),
         )
 
@@ -182,19 +182,21 @@ class WireGuardManager:
             client_address=client_address,
             server_public_key=server_public_key,
         )
+        write_text_file(private_key_path, f"{private_key}\n")
         write_text_file(client_config_path, client_config)
 
         try:
             self.storage.add_client(client)
-            self.create_server_config()
-            self._sync_runtime_config()
-        except Exception:
-            client_config_path.unlink(missing_ok=True)
-            existing = self.storage.get_client(client_name)
-            if existing is not None:
-                self.storage.remove_client(client_name)
-            self.create_server_config()
+            local_config_path = self.create_server_config()
+            self._sync_runtime_config(local_config_path)
+        except VPNManagerError:
+            self._rollback_added_client(client_name, client_config_path, private_key_path)
             raise
+        except OSError as exc:
+            self._rollback_added_client(client_name, client_config_path, private_key_path)
+            raise VPNManagerError(
+                f"Failed to create client files for '{client_name}'."
+            ) from exc
 
         self.logger.info("Client '%s' created at %s", client_name, client_config_path)
         return client
@@ -208,19 +210,28 @@ class WireGuardManager:
             raise VPNManagerError(f"Client '{client_name}' was not found.")
 
         config_path = Path(existing.config_path)
+        private_key_path = Path(existing.private_key_path)
         config_backup = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+        private_key_backup = (
+            private_key_path.read_text(encoding="utf-8")
+            if private_key_path.exists()
+            else None
+        )
 
         self.storage.remove_client(client_name)
         try:
             config_path.unlink(missing_ok=True)
-            self.create_server_config()
-            self._sync_runtime_config()
-        except Exception:
-            self.storage.add_client(existing)
-            if config_backup is not None:
-                write_text_file(config_path, config_backup)
-            self.create_server_config()
+            private_key_path.unlink(missing_ok=True)
+            local_config_path = self.create_server_config()
+            self._sync_runtime_config(local_config_path)
+        except VPNManagerError:
+            self._restore_removed_client(existing, config_backup, private_key_backup)
             raise
+        except OSError as exc:
+            self._restore_removed_client(existing, config_backup, private_key_backup)
+            raise VPNManagerError(
+                f"Failed to remove client files for '{client_name}'."
+            ) from exc
 
         self.logger.info("Client '%s' removed.", client_name)
 
@@ -310,8 +321,7 @@ class WireGuardManager:
 
         ensure_linux()
         ensure_root()
-        self.sync_server_config()
-        run_command(["systemctl", "start", self.service_name])
+        self._apply_config_and_service_action("start")
         self.logger.info("VPN started.")
 
     def stop_vpn(self) -> None:
@@ -327,8 +337,7 @@ class WireGuardManager:
 
         ensure_linux()
         ensure_root()
-        self.sync_server_config()
-        run_command(["systemctl", "restart", self.service_name])
+        self._apply_config_and_service_action("restart")
         self.logger.info("VPN restarted.")
 
     def _allocate_client_address(self) -> str:
@@ -368,7 +377,7 @@ class WireGuardManager:
             "PersistentKeepalive = 25\n"
         )
 
-    def _sync_runtime_config(self) -> None:
+    def _sync_runtime_config(self, local_config_path: Path) -> None:
         """Best-effort sync after local config changes."""
 
         try:
@@ -383,10 +392,145 @@ class WireGuardManager:
             )
             return
 
-        self.sync_server_config()
         if self.is_service_active():
-            run_command(["systemctl", "restart", self.service_name])
-            self.logger.info("Service restarted to apply the updated peer list.")
+            self._apply_config_and_service_action("restart", local_config_path)
+            return
+
+        self.sync_server_config(local_config_path)
+
+    def _apply_config_and_service_action(
+        self,
+        action: str,
+        local_config_path: Path | None = None,
+    ) -> None:
+        """Apply the generated config and roll back the file if the service action fails."""
+
+        had_existing_config, backup_path = self._apply_system_config(local_config_path)
+
+        try:
+            run_command(["systemctl", action, self.service_name])
+        except VPNManagerError as exc:
+            self.logger.error(
+                "Failed to %s service with the updated config. Rolling back system config.",
+                action,
+            )
+            self._rollback_service_config(action, had_existing_config, backup_path, exc)
+        else:
+            self._cleanup_system_config_backup(backup_path)
+
+    def _apply_system_config(
+        self,
+        local_config_path: Path | None = None,
+    ) -> tuple[bool, Path | None]:
+        """Copy the local config into /etc/wireguard and keep a backup for rollback."""
+
+        local_config = local_config_path or self.create_server_config()
+        system_config = self.config.system_server_config
+        system_config.parent.mkdir(parents=True, exist_ok=True)
+
+        had_existing_config = system_config.exists()
+        backup_path = Path(f"{system_config}.bak") if had_existing_config else None
+
+        if backup_path is not None:
+            shutil.copyfile(system_config, backup_path)
+            backup_path.chmod(0o600)
+
+        try:
+            replace_file_atomically(local_config, system_config)
+        except OSError:
+            if backup_path is not None:
+                backup_path.unlink(missing_ok=True)
+            raise
+
+        self.logger.info("Server config synced to %s", system_config)
+        return had_existing_config, backup_path
+
+    def _rollback_service_config(
+        self,
+        action: str,
+        had_existing_config: bool,
+        backup_path: Path | None,
+        original_error: VPNManagerError,
+    ) -> None:
+        """Restore the previous config after a failed service action."""
+
+        try:
+            self._restore_system_config(had_existing_config, backup_path)
+        except OSError as rollback_error:
+            raise VPNManagerError(
+                f"Failed to {action} VPN and failed to restore the previous config: {rollback_error}"
+            ) from original_error
+
+        if action == "restart" and had_existing_config:
+            try:
+                run_command(["systemctl", "restart", self.service_name])
+            except VPNManagerError as restart_error:
+                raise VPNManagerError(
+                    "The new config failed to restart WireGuard. "
+                    "The previous config was restored, but restarting with the restored config also failed.\n"
+                    f"{restart_error}"
+                ) from original_error
+
+        raise VPNManagerError(
+            f"Failed to {action} VPN with the updated config. Previous config was restored.\n{original_error}"
+        ) from original_error
+
+    def _restore_system_config(
+        self,
+        had_existing_config: bool,
+        backup_path: Path | None,
+    ) -> None:
+        """Restore the previous system config after a failed update."""
+
+        system_config = self.config.system_server_config
+
+        if had_existing_config and backup_path is not None and backup_path.exists():
+            replace_file_atomically(backup_path, system_config)
+            backup_path.unlink(missing_ok=True)
+            self.logger.warning("System config rolled back to the previous version.")
+            return
+
+        system_config.unlink(missing_ok=True)
+        self.logger.warning("System config removed because there was no previous version to restore.")
+
+    @staticmethod
+    def _cleanup_system_config_backup(backup_path: Path | None) -> None:
+        if backup_path is not None:
+            backup_path.unlink(missing_ok=True)
+
+    def _rollback_added_client(
+        self,
+        client_name: str,
+        client_config_path: Path,
+        private_key_path: Path,
+    ) -> None:
+        """Remove partially created client artifacts after a failure."""
+
+        client_config_path.unlink(missing_ok=True)
+        private_key_path.unlink(missing_ok=True)
+
+        if self.storage.get_client(client_name) is not None:
+            self.storage.remove_client(client_name)
+
+        self.create_server_config()
+
+    def _restore_removed_client(
+        self,
+        client: ClientRecord,
+        config_backup: str | None,
+        private_key_backup: str | None,
+    ) -> None:
+        """Restore a removed client after a failure."""
+
+        self.storage.add_client(client)
+
+        if config_backup is not None:
+            write_text_file(Path(client.config_path), config_backup)
+
+        if private_key_backup is not None:
+            write_text_file(Path(client.private_key_path), private_key_backup)
+
+        self.create_server_config()
 
     def is_service_active(self) -> bool:
         """Check whether the WireGuard service is active."""

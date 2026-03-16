@@ -6,4 +6,4 @@ data/*.log
 data/*.sqlite3
 configs/clients/*.conf
 configs/server/*.conf
-configs/keys/*.key
+configs/keys/

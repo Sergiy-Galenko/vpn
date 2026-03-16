@@ -20,6 +20,7 @@ class AppConfig:
     server_configs_dir: Path
     client_configs_dir: Path
     keys_dir: Path
+    client_private_keys_dir: Path
     database_path: Path
     log_path: Path
     interface_name: str
@@ -93,6 +94,7 @@ def load_config(base_dir: Path | None = None) -> AppConfig:
     server_configs_dir = configs_dir / "server"
     client_configs_dir = configs_dir / "clients"
     keys_dir = configs_dir / "keys"
+    client_private_keys_dir = keys_dir / "clients"
 
     system_server_config = Path(
         os.getenv(
@@ -114,6 +116,7 @@ def load_config(base_dir: Path | None = None) -> AppConfig:
         server_configs_dir=server_configs_dir,
         client_configs_dir=client_configs_dir,
         keys_dir=keys_dir,
+        client_private_keys_dir=client_private_keys_dir,
         database_path=data_dir / "vpn.sqlite3",
         log_path=data_dir / "vpn_manager.log",
         interface_name=interface_name,

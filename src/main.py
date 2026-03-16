@@ -53,7 +53,7 @@ def create_manager(verbose: bool) -> WireGuardManager:
 
     config = load_config()
     setup_logging(config.log_path, verbose=verbose)
-    storage = ClientStorage(config.database_path)
+    storage = ClientStorage(config.database_path, config.client_private_keys_dir)
     return WireGuardManager(config=config, storage=storage)
 
 

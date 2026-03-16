@@ -5,7 +5,9 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -86,6 +88,29 @@ def write_text_file(path: Path, content: str, mode: int = 0o600) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     os.chmod(path, mode)
+
+
+def replace_file_atomically(source: Path, destination: Path, mode: int = 0o600) -> None:
+    """Copy a file into place using an atomic replace within the target directory."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+
+        shutil.copyfile(source, temp_path)
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, destination)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def validate_client_name(name: str) -> str:
