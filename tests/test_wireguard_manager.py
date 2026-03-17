@@ -119,6 +119,36 @@ class WireGuardManagerTests(unittest.TestCase):
         self.assertIn("private_key_path", columns)
         self.assertNotIn("private_key", columns)
 
+    def test_list_clients_with_status_skips_runtime_lookup_off_linux(self) -> None:
+        self.storage.add_client(
+            ClientRecord(
+                name="phone",
+                address="10.8.0.2/32",
+                public_key="pubkey-1",
+                config_path=str(self.config.client_configs_dir / "phone.conf"),
+                private_key_path=str(self.config.client_private_keys_dir / "phone.key"),
+                created_at="2026-03-16T00:00:00+00:00",
+            )
+        )
+
+        with (
+            mock.patch("src.wireguard_manager.is_linux", return_value=False),
+            mock.patch.object(self.manager, "get_connected_clients") as get_connected_clients,
+        ):
+            clients = self.manager.list_clients_with_status()
+
+        get_connected_clients.assert_not_called()
+        self.assertEqual(len(clients), 1)
+        self.assertFalse(clients[0][1])
+
+    def test_start_vpn_reports_clear_linux_host_requirement(self) -> None:
+        with mock.patch("src.utils.platform.system", return_value="Darwin"):
+            with self.assertRaises(VPNManagerError) as context:
+                self.manager.start_vpn()
+
+        self.assertIn("available only on the Linux host where WireGuard is running", str(context.exception))
+        self.assertIn("Current host: macOS", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

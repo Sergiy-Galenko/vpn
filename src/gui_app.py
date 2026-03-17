@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import platform
 import queue
 import subprocess
 import threading
@@ -12,8 +11,15 @@ from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import Callable
 
+from src.config import EditableVPNSettings, editable_settings_from_config, save_editable_settings
 from src.models import ClientRecord, ConnectedClient, VPNManagerError
-from src.utils import is_root
+from src.utils import (
+    HostPlatformInfo,
+    detect_host_platform,
+    is_linux,
+    is_root,
+    linux_host_requirement_message,
+)
 from src.wireguard_manager import WireGuardManager
 
 
@@ -82,15 +88,16 @@ def open_path_in_system(path: Path) -> None:
     """Open a file or directory in the host operating system."""
 
     target = path.expanduser().resolve()
+    host = detect_host_platform()
 
     try:
-        if platform.system() == "Darwin":
+        if host.system == "Darwin":
             subprocess.run(["open", str(target)], check=False)
             return
-        if platform.system() == "Linux":
+        if host.system == "Linux":
             subprocess.run(["xdg-open", str(target)], check=False)
             return
-        if platform.system() == "Windows":
+        if host.system == "Windows":
             os.startfile(target)  # type: ignore[attr-defined]
             return
     except OSError as exc:
@@ -105,8 +112,10 @@ class VPNDesktopApp(tk.Tk):
     def __init__(self, manager: WireGuardManager) -> None:
         super().__init__()
         self.manager = manager
+        self.host_platform: HostPlatformInfo = detect_host_platform()
         self.task_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy_widgets: list[tk.Widget] = []
+        self.linux_only_widgets: list[tk.Widget] = []
         self.client_rows: dict[str, ClientRecord] = {}
 
         self.title("WireGuard Control Room")
@@ -122,9 +131,21 @@ class VPNDesktopApp(tk.Tk):
         self.overview_note_var = tk.StringVar()
         self.connected_note_var = tk.StringVar()
         self.client_name_var = tk.StringVar()
+        self.settings_vars = {
+            "endpoint": tk.StringVar(),
+            "interface_name": tk.StringVar(),
+            "server_address": tk.StringVar(),
+            "server_port": tk.StringVar(),
+            "public_interface": tk.StringVar(),
+            "dns": tk.StringVar(),
+            "client_allowed_ips": tk.StringVar(),
+            "connected_window_seconds": tk.StringVar(),
+        }
 
         self._build_styles()
         self._build_shell()
+        self._load_settings_form()
+        self._update_platform_capabilities()
         self._refresh_all()
         self.after(160, self._poll_task_queue)
 
@@ -274,6 +295,8 @@ class VPNDesktopApp(tk.Tk):
             button = ttk.Button(parent, text=label, command=command, style=style)
             button.pack(fill="x", padx=24, pady=6)
             self.busy_widgets.append(button)
+            if label in {"Install VPN", "Start VPN", "Stop VPN", "Restart VPN"}:
+                self.linux_only_widgets.append(button)
 
         info_card = tk.Frame(parent, bg="#19314F", bd=0, highlightthickness=0)
         info_card.pack(fill="x", padx=24, pady=(28, 0))
@@ -355,16 +378,19 @@ class VPNDesktopApp(tk.Tk):
         self.clients_tab = tk.Frame(notebook, bg=PALETTE["sand"])
         self.connected_tab = tk.Frame(notebook, bg=PALETTE["sand"])
         self.files_tab = tk.Frame(notebook, bg=PALETTE["sand"])
+        self.settings_tab = tk.Frame(notebook, bg=PALETTE["sand"])
 
         notebook.add(self.overview_tab, text="Overview")
         notebook.add(self.clients_tab, text="Clients")
         notebook.add(self.connected_tab, text="Connected")
         notebook.add(self.files_tab, text="Files & Logs")
+        notebook.add(self.settings_tab, text="Settings")
 
         self._build_overview_tab()
         self._build_clients_tab()
         self._build_connected_tab()
         self._build_files_tab()
+        self._build_settings_tab()
 
     def _build_overview_tab(self) -> None:
         container = tk.Frame(self.overview_tab, bg=PALETTE["sand"])
@@ -459,6 +485,7 @@ class VPNDesktopApp(tk.Tk):
             button = ttk.Button(button_row, text=label, command=command, style=style)
             button.pack(side="left", padx=(0, 10))
             self.busy_widgets.append(button)
+            self.linux_only_widgets.append(button)
 
     def _build_clients_tab(self) -> None:
         container = tk.Frame(self.clients_tab, bg=PALETTE["sand"])
@@ -581,6 +608,7 @@ class VPNDesktopApp(tk.Tk):
         )
         refresh_button.pack(anchor="w")
         self.busy_widgets.append(refresh_button)
+        self.linux_only_widgets.append(refresh_button)
 
         table_card = tk.Frame(container, bg=PALETTE["paper"], padx=18, pady=18)
         table_card.grid(row=1, column=0, sticky="nsew")
@@ -710,6 +738,72 @@ class VPNDesktopApp(tk.Tk):
         self.log_text.pack(fill="both", expand=True)
         self.log_text.configure(state="disabled")
 
+    def _build_settings_tab(self) -> None:
+        container = tk.Frame(self.settings_tab, bg=PALETTE["sand"])
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+
+        card = tk.Frame(container, bg=PALETTE["paper"], padx=20, pady=20)
+        card.pack(fill="both", expand=True)
+
+        tk.Label(
+            card,
+            text="VPN Settings",
+            bg=PALETTE["paper"],
+            fg=PALETTE["ink"],
+            font=("Iowan Old Style", 22, "bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        tk.Label(
+            card,
+            text=(
+                "Customize endpoint, interface, subnet, DNS and related parameters. "
+                "Values are saved into .env and applied to new configs immediately."
+            ),
+            bg=PALETTE["paper"],
+            fg=PALETTE["muted"],
+            justify="left",
+            wraplength=760,
+            font=("Avenir Next", 11),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 18))
+
+        row_specs = [
+            ("Endpoint", "endpoint"),
+            ("Interface name", "interface_name"),
+            ("Server address", "server_address"),
+            ("Server port", "server_port"),
+            ("Public interface", "public_interface"),
+            ("DNS", "dns"),
+            ("Client allowed IPs", "client_allowed_ips"),
+            ("Connected window", "connected_window_seconds"),
+        ]
+
+        for row_index, (label, key) in enumerate(row_specs, start=2):
+            tk.Label(
+                card,
+                text=label,
+                bg=PALETTE["paper"],
+                fg=PALETTE["ink"],
+                anchor="w",
+                font=("Avenir Next", 10, "bold"),
+            ).grid(row=row_index, column=0, sticky="w", pady=7, padx=(0, 14))
+            entry = ttk.Entry(card, textvariable=self.settings_vars[key], width=48)
+            entry.grid(row=row_index, column=1, sticky="ew", pady=7)
+            self.busy_widgets.append(entry)
+
+        card.columnconfigure(1, weight=1)
+
+        button_row = tk.Frame(card, bg=PALETTE["paper"])
+        button_row.grid(row=10, column=0, columnspan=2, sticky="w", pady=(18, 0))
+
+        for label, command in [
+            ("Save Settings", self._save_settings),
+            ("Reload Settings", self._load_settings_form),
+            ("Open .env", lambda: self._open_path(self.manager.config.project_root / ".env")),
+        ]:
+            button = ttk.Button(button_row, text=label, command=command, style="Accent.TButton")
+            button.pack(side="left", padx=(0, 10))
+            self.busy_widgets.append(button)
+
     def _build_status_bar(self, parent: tk.Frame) -> None:
         status_bar = tk.Frame(parent, bg=PALETTE["ink"], height=38)
         status_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
@@ -783,6 +877,18 @@ class VPNDesktopApp(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _update_platform_capabilities(self) -> None:
+        if self.host_platform.local_wireguard_supported:
+            return
+
+        for widget in self.linux_only_widgets:
+            try:
+                widget.configure(state="disabled")
+            except tk.TclError:
+                continue
+
+        self.status_var.set(linux_host_requirement_message("Local VPN control"))
+
     def _poll_task_queue(self) -> None:
         try:
             while True:
@@ -803,7 +909,14 @@ class VPNDesktopApp(tk.Tk):
         state = "disabled" if busy else "normal"
         for widget in self.busy_widgets:
             try:
-                widget.configure(state=state)
+                widget_state = state
+                if (
+                    not busy
+                    and not self.host_platform.local_wireguard_supported
+                    and widget in self.linux_only_widgets
+                ):
+                    widget_state = "disabled"
+                widget.configure(state=widget_state)
             except tk.TclError:
                 continue
 
@@ -884,6 +997,53 @@ class VPNDesktopApp(tk.Tk):
         except VPNManagerError as exc:
             messagebox.showerror("Open path failed", str(exc), parent=self)
 
+    def _load_settings_form(self) -> None:
+        settings = editable_settings_from_config(self.manager.config)
+        self.settings_vars["endpoint"].set(settings.endpoint)
+        self.settings_vars["interface_name"].set(settings.interface_name)
+        self.settings_vars["server_address"].set(settings.server_address)
+        self.settings_vars["server_port"].set(str(settings.server_port))
+        self.settings_vars["public_interface"].set(settings.public_interface)
+        self.settings_vars["dns"].set(settings.dns)
+        self.settings_vars["client_allowed_ips"].set(settings.client_allowed_ips)
+        self.settings_vars["connected_window_seconds"].set(
+            str(settings.connected_window_seconds)
+        )
+
+    def _save_settings(self) -> None:
+        try:
+            settings = EditableVPNSettings(
+                endpoint=self.settings_vars["endpoint"].get().strip(),
+                interface_name=self.settings_vars["interface_name"].get().strip(),
+                server_address=self.settings_vars["server_address"].get().strip(),
+                server_port=int(self.settings_vars["server_port"].get().strip()),
+                public_interface=self.settings_vars["public_interface"].get().strip(),
+                dns=self.settings_vars["dns"].get().strip(),
+                client_allowed_ips=self.settings_vars["client_allowed_ips"].get().strip(),
+                connected_window_seconds=int(
+                    self.settings_vars["connected_window_seconds"].get().strip()
+                ),
+            )
+            new_config = save_editable_settings(self.manager.config.project_root, settings)
+            self.manager.update_config(new_config)
+            self.host_platform = detect_host_platform()
+            self._load_settings_form()
+            self._refresh_all()
+            self.status_var.set("VPN settings saved.")
+            messagebox.showinfo(
+                "Settings saved",
+                "VPN settings were saved to .env and applied to the application.",
+                parent=self,
+            )
+        except ValueError:
+            messagebox.showerror(
+                "Invalid settings",
+                "Server port and connected window must be integers.",
+                parent=self,
+            )
+        except VPNManagerError as exc:
+            messagebox.showerror("Invalid settings", str(exc), parent=self)
+
     def _refresh_all(self) -> None:
         clients = self.manager.list_clients_with_status()
         connected_clients, connected_note = self._get_connected_peers()
@@ -898,6 +1058,9 @@ class VPNDesktopApp(tk.Tk):
         self._update_logs()
 
     def _get_connected_peers(self) -> tuple[list[ConnectedClient], str]:
+        if not self.host_platform.local_wireguard_supported:
+            return [], linux_host_requirement_message("Connected peer lookup")
+
         try:
             peers = self.manager.get_connected_clients()
         except VPNManagerError as exc:
@@ -905,6 +1068,9 @@ class VPNDesktopApp(tk.Tk):
         return peers, "Peers shown below had a recent WireGuard handshake."
 
     def _service_state_text(self) -> str:
+        if not self.host_platform.local_wireguard_supported:
+            return "Manage on Ubuntu host"
+
         try:
             return "Active" if self.manager.is_service_active() else "Stopped"
         except VPNManagerError as exc:
@@ -962,7 +1128,8 @@ class VPNDesktopApp(tk.Tk):
             f"Clients: {len(clients)} | Connected: {len(connected_clients)}"
         )
         self.hero_environment_var.set(
-            f"{platform.system()} | {'root' if is_root() else 'non-root'}"
+            f"{self.host_platform.display_name} {self.host_platform.release} | "
+            f"{self.host_platform.machine} | {'root' if is_root() else 'non-root'}"
         )
 
     def _update_overview(
@@ -991,6 +1158,12 @@ class VPNDesktopApp(tk.Tk):
                     f"Server address: {self.manager.config.server_interface}",
                     f"Public interface: {self.manager.config.public_interface}",
                     connected_note,
+                    (
+                        "This desktop is acting as a control client. "
+                        "Run local VPN service operations on Ubuntu."
+                        if not self.host_platform.local_wireguard_supported
+                        else "Local WireGuard operations are available on this host."
+                    ),
                 ]
             )
         )
@@ -999,13 +1172,20 @@ class VPNDesktopApp(tk.Tk):
         self.sidebar_info.configure(
             text="\n".join(
                 [
-                    f"Platform: {platform.system()}",
+                    f"Platform: {self.host_platform.display_name}",
+                    f"Release: {self.host_platform.release}",
+                    f"Architecture: {self.host_platform.machine}",
                     f"Root mode: {'yes' if is_root() else 'no'}",
                     f"Interface: {self.manager.config.interface_name}",
                     f"Server subnet: {self.manager.config.network}",
                     f"Listen port: {self.manager.config.server_port}",
                     f"Endpoint: {self.manager.config.endpoint}",
                     f"Service state: {service_text}",
+                    (
+                        "Local service control: available"
+                        if self.host_platform.local_wireguard_supported
+                        else "Local service control: use Ubuntu host"
+                    ),
                 ]
             )
         )

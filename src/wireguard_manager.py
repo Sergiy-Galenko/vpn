@@ -12,6 +12,7 @@ from src.storage import ClientStorage
 from src.utils import (
     ensure_linux,
     ensure_root,
+    is_linux,
     is_root,
     replace_file_atomically,
     run_command,
@@ -36,6 +37,20 @@ class WireGuardManager:
         self.config.client_private_keys_dir.mkdir(parents=True, exist_ok=True)
         self.storage.initialize()
 
+    def update_config(self, config: AppConfig) -> None:
+        """Replace runtime config after the user updates editable VPN settings."""
+
+        self.config = config
+        self.storage.database_path = config.database_path
+        self.storage.client_private_keys_dir = config.client_private_keys_dir
+        self.config.data_dir.mkdir(parents=True, exist_ok=True)
+        self.config.server_configs_dir.mkdir(parents=True, exist_ok=True)
+        self.config.client_configs_dir.mkdir(parents=True, exist_ok=True)
+        self.config.keys_dir.mkdir(parents=True, exist_ok=True)
+        self.config.client_private_keys_dir.mkdir(parents=True, exist_ok=True)
+        self.storage.initialize()
+        self.logger.info("Runtime VPN configuration updated.")
+
     @property
     def service_name(self) -> str:
         return f"wg-quick@{self.config.interface_name}"
@@ -51,7 +66,7 @@ class WireGuardManager:
     def install_wireguard(self) -> None:
         """Install packages, enable forwarding, and write the server config."""
 
-        ensure_linux()
+        ensure_linux("Installing WireGuard locally")
         ensure_root()
 
         run_command(["apt-get", "update"])
@@ -66,7 +81,7 @@ class WireGuardManager:
     def enable_ip_forwarding(self) -> None:
         """Enable IPv4 and IPv6 forwarding through sysctl."""
 
-        ensure_linux()
+        ensure_linux("Enabling IP forwarding locally")
         ensure_root()
 
         content = (
@@ -244,10 +259,11 @@ class WireGuardManager:
         """Return stored clients with a best-effort connected flag."""
 
         connected_keys: set[str] = set()
-        try:
-            connected_keys = {peer.public_key for peer in self.get_connected_clients()}
-        except VPNManagerError as exc:
-            self.logger.debug("Connected peer lookup skipped: %s", exc)
+        if is_linux():
+            try:
+                connected_keys = {peer.public_key for peer in self.get_connected_clients()}
+            except VPNManagerError as exc:
+                self.logger.debug("Connected peer lookup skipped: %s", exc)
 
         return [
             (client, client.public_key in connected_keys)
@@ -262,7 +278,7 @@ class WireGuardManager:
         latest handshake time as a practical approximation.
         """
 
-        ensure_linux()
+        ensure_linux("Connected peer lookup")
 
         result = run_command(
             ["wg", "show", self.config.interface_name, "dump"],
@@ -319,7 +335,7 @@ class WireGuardManager:
     def start_vpn(self) -> None:
         """Start the WireGuard service."""
 
-        ensure_linux()
+        ensure_linux("Starting the VPN locally")
         ensure_root()
         self._apply_config_and_service_action("start")
         self.logger.info("VPN started.")
@@ -327,7 +343,7 @@ class WireGuardManager:
     def stop_vpn(self) -> None:
         """Stop the WireGuard service."""
 
-        ensure_linux()
+        ensure_linux("Stopping the VPN locally")
         ensure_root()
         run_command(["systemctl", "stop", self.service_name])
         self.logger.info("VPN stopped.")
@@ -335,7 +351,7 @@ class WireGuardManager:
     def restart_vpn(self) -> None:
         """Restart the WireGuard service."""
 
-        ensure_linux()
+        ensure_linux("Restarting the VPN locally")
         ensure_root()
         self._apply_config_and_service_action("restart")
         self.logger.info("VPN restarted.")
@@ -535,7 +551,7 @@ class WireGuardManager:
     def is_service_active(self) -> bool:
         """Check whether the WireGuard service is active."""
 
-        ensure_linux()
+        ensure_linux("Checking the local VPN service state")
         result = run_command(
             ["systemctl", "is-active", self.service_name],
             check=False,

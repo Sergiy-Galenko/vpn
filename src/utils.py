@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -16,6 +17,68 @@ from src.models import VPNManagerError
 
 
 CLIENT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
+
+
+@dataclass(slots=True, frozen=True)
+class HostPlatformInfo:
+    """Normalized information about the host operating system."""
+
+    system: str
+    display_name: str
+    release: str
+    version: str
+    machine: str
+    local_wireguard_supported: bool
+
+    @property
+    def summary(self) -> str:
+        return f"{self.display_name} {self.release} | {self.machine}"
+
+
+def detect_host_platform() -> HostPlatformInfo:
+    """Detect the current host OS and normalize user-facing metadata."""
+
+    system = platform.system() or "Unknown"
+    release = platform.release() or "unknown"
+    version = platform.version() or "unknown"
+    machine = platform.machine() or "unknown"
+
+    if system == "Darwin":
+        display_name = "macOS"
+        mac_release = platform.mac_ver()[0]
+        if mac_release:
+            release = mac_release
+    elif system == "Linux":
+        display_name = "Linux"
+    elif system == "Windows":
+        display_name = "Windows"
+    else:
+        display_name = system
+
+    return HostPlatformInfo(
+        system=system,
+        display_name=display_name,
+        release=release,
+        version=version,
+        machine=machine,
+        local_wireguard_supported=system == "Linux",
+    )
+
+
+def is_linux() -> bool:
+    """Return True when the current host is Linux."""
+
+    return detect_host_platform().local_wireguard_supported
+
+
+def linux_host_requirement_message(operation: str = "This action") -> str:
+    """Return a clear cross-platform message for Linux-only operations."""
+
+    host = detect_host_platform()
+    return (
+        f"{operation} is available only on the Linux host where WireGuard is running. "
+        f"Current host: {host.display_name} {host.release}. Run it on your Ubuntu VPN server."
+    )
 
 
 def setup_logging(log_path: Path, verbose: bool = False) -> None:
@@ -128,11 +191,11 @@ def validate_client_name(name: str) -> str:
     return clean_name
 
 
-def ensure_linux() -> None:
+def ensure_linux(operation: str = "This action") -> None:
     """Limit privileged operations to Linux hosts."""
 
-    if platform.system() != "Linux":
-        raise VPNManagerError("WireGuard service operations in this project require Linux.")
+    if not is_linux():
+        raise VPNManagerError(linux_host_requirement_message(operation))
 
 
 def is_root() -> bool:

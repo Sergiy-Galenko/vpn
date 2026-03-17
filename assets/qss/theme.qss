@@ -1,0 +1,38 @@
+QMainWindow {
+  background: #f4f1e8;
+}
+
+QWidget {
+  color: #1f2a30;
+  font-size: 13px;
+}
+
+QPushButton {
+  background: #1f5f6b;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+QPushButton:hover {
+  background: #154650;
+}
+
+QPushButton:disabled {
+  background: #9fb6bb;
+}
+
+QLineEdit, QComboBox, QSpinBox, QTextEdit, QTableWidget {
+  background: white;
+  border: 1px solid #d7d1c4;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+QHeaderView::section {
+  background: #e8e2d5;
+  padding: 6px;
+  border: none;
+  border-bottom: 1px solid #d7d1c4;
+}

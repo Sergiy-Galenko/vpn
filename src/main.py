@@ -12,9 +12,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import load_config
+from src.config import editable_settings_from_config, save_editable_settings
 from src.models import ConnectedClient, VPNManagerError
 from src.storage import ClientStorage
-from src.utils import setup_logging
+from src.utils import detect_host_platform, setup_logging
 from src.wireguard_manager import WireGuardManager
 
 
@@ -46,6 +47,26 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("start-vpn", help="Start the WireGuard service.")
     subparsers.add_parser("stop-vpn", help="Stop the WireGuard service.")
     subparsers.add_parser("restart-vpn", help="Restart the WireGuard service.")
+    subparsers.add_parser("system-info", help="Show detected host operating system information.")
+    subparsers.add_parser("show-config", help="Show current editable VPN settings.")
+
+    configure_parser = subparsers.add_parser(
+        "configure-vpn",
+        help="Update editable VPN settings and save them into .env.",
+    )
+    configure_parser.add_argument("--endpoint", help="Public endpoint or DNS name.")
+    configure_parser.add_argument("--interface", dest="interface_name", help="WireGuard interface name.")
+    configure_parser.add_argument("--server-address", help="Server address CIDR, for example 10.8.0.1/24.")
+    configure_parser.add_argument("--port", dest="server_port", type=int, help="WireGuard listen port.")
+    configure_parser.add_argument("--public-interface", help="Outgoing network interface, for example eth0.")
+    configure_parser.add_argument("--dns", help="Client DNS servers, for example 1.1.1.1,8.8.8.8.")
+    configure_parser.add_argument("--allowed-ips", dest="client_allowed_ips", help="Client allowed IPs.")
+    configure_parser.add_argument(
+        "--connected-window",
+        dest="connected_window_seconds",
+        type=int,
+        help="Seconds used to classify recent connected peers.",
+    )
     subparsers.add_parser("gui", help="Open the desktop GUI application.")
     subparsers.add_parser("app", help="Alias for the desktop GUI application.")
     return parser
@@ -103,11 +124,75 @@ def print_connected_clients_safe(manager: WireGuardManager) -> None:
         print(f"Connected client status is unavailable: {exc}")
 
 
+def print_host_platform_info() -> None:
+    """Print normalized host OS information for the current machine."""
+
+    host = detect_host_platform()
+    print(f"Host OS: {host.display_name}")
+    print(f"System: {host.system}")
+    print(f"Release: {host.release}")
+    print(f"Version: {host.version}")
+    print(f"Architecture: {host.machine}")
+    print(
+        "Local WireGuard control: "
+        + ("supported" if host.local_wireguard_supported else "not supported on this host")
+    )
+
+
+def print_vpn_config(manager: WireGuardManager) -> None:
+    """Print editable VPN settings."""
+
+    settings = editable_settings_from_config(manager.config)
+    print(f"WG_ENDPOINT={settings.endpoint}")
+    print(f"WG_INTERFACE_NAME={settings.interface_name}")
+    print(f"WG_SERVER_ADDRESS={settings.server_address}")
+    print(f"WG_SERVER_PORT={settings.server_port}")
+    print(f"WG_PUBLIC_INTERFACE={settings.public_interface}")
+    print(f"WG_DNS={settings.dns}")
+    print(f"WG_CLIENT_ALLOWED_IPS={settings.client_allowed_ips}")
+    print(f"WG_CONNECTED_WINDOW_SECONDS={settings.connected_window_seconds}")
+
+
+def configure_vpn(manager: WireGuardManager, args: argparse.Namespace) -> None:
+    """Update editable VPN settings from CLI arguments."""
+
+    current = editable_settings_from_config(manager.config)
+    updates_applied = False
+
+    for field_name in (
+        "endpoint",
+        "interface_name",
+        "server_address",
+        "server_port",
+        "public_interface",
+        "dns",
+        "client_allowed_ips",
+        "connected_window_seconds",
+    ):
+        value = getattr(args, field_name, None)
+        if value is None:
+            continue
+        setattr(current, field_name, value)
+        updates_applied = True
+
+    if not updates_applied:
+        raise VPNManagerError("Provide at least one configure-vpn option to update.")
+
+    new_config = save_editable_settings(manager.config.project_root, current)
+    manager.update_config(new_config)
+    print("VPN settings saved.")
+    print_vpn_config(manager)
+
+
 def run_interactive_menu(manager: WireGuardManager) -> int:
     """Run the numbered terminal menu requested for this project."""
 
+    host = detect_host_platform()
     while True:
         print("\nWireGuard VPN Manager")
+        print(f"Host: {host.summary}")
+        if not host.local_wireguard_supported:
+            print("Note: local WireGuard service control is disabled on this host.")
         print("1. Install VPN")
         print("2. Add client")
         print("3. Remove client")
@@ -181,6 +266,15 @@ def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
     if command == "show-connected":
         print_connected_clients(manager.get_connected_clients())
         return 0
+    if command == "system-info":
+        print_host_platform_info()
+        return 0
+    if command == "show-config":
+        print_vpn_config(manager)
+        return 0
+    if command == "configure-vpn":
+        configure_vpn(manager, args)
+        return 0
     if command == "start-vpn":
         manager.start_vpn()
         print("VPN started.")
@@ -217,9 +311,16 @@ def main() -> int:
 
     try:
         manager = create_manager(verbose=args.verbose)
+        host = detect_host_platform()
+        logging.getLogger("main").info("Detected host platform: %s", host.summary)
         return execute_command(args, manager)
     except VPNManagerError as exc:
-        logging.getLogger("main").error("%s", exc)
+        logger = logging.getLogger("main")
+        message = str(exc)
+        if "available only on the Linux host where WireGuard is running" in message:
+            logger.warning("%s", message)
+        else:
+            logger.error("%s", message)
         print(f"Error: {exc}")
         return 1
     except KeyboardInterrupt:

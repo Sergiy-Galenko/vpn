@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wgdesk"
+version = "0.1.0"
+description = "WireGuard desktop control panel for local and remote Ubuntu servers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Serhii" }
+]
+dependencies = [
+  "PySide6>=6.8.0",
+  "SQLAlchemy>=2.0.36",
+  "alembic>=1.14.0",
+  "pydantic>=2.10.0",
+  "python-dotenv>=1.0.1",
+  "paramiko>=3.5.0",
+  "qrcode[pil]>=7.4.2",
+  "keyring>=25.5.0",
+  "cryptography>=43.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.3",
+  "pytest-qt>=4.4.0",
+  "pytest-mock>=3.14.0",
+  "freezegun>=1.5.1",
+  "ruff>=0.7.3",
+  "mypy>=1.13.0",
+  "pyinstaller>=6.11.0",
+]
+
+[project.scripts]
+wgdesk = "wgdesk.app:main"
+wgdesk-cli = "wgdesk.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wgdesk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+qt_api = "pyside6"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_optional = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+plugins = []
+

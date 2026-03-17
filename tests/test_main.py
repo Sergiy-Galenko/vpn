@@ -73,6 +73,15 @@ class MainEntryPointTests(unittest.TestCase):
 
         self.assertIn("desktop UI could not be started", str(context.exception))
 
+    def test_execute_command_start_vpn_propagates_clear_platform_message(self) -> None:
+        args = argparse.Namespace(command="start-vpn")
+
+        with mock.patch("src.utils.platform.system", return_value="Darwin"):
+            with self.assertRaises(VPNManagerError) as context:
+                execute_command(args, self.manager)
+
+        self.assertIn("Current host: macOS", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
