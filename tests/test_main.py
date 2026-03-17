@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from src.config import AppConfig
-from src.main import execute_command
+from src.main import choose_launch_mode, execute_command
 from src.models import VPNManagerError
 from src.storage import ClientStorage
 from src.wireguard_manager import WireGuardManager
@@ -81,6 +81,19 @@ class MainEntryPointTests(unittest.TestCase):
                 execute_command(args, self.manager)
 
         self.assertIn("Current host: macOS", str(context.exception))
+
+    def test_execute_command_runs_console_interface(self) -> None:
+        args = argparse.Namespace(command="console")
+
+        with mock.patch("src.console_app.run_console_app", return_value=0) as run_console_app:
+            result = execute_command(args, self.manager)
+
+        self.assertEqual(result, 0)
+        run_console_app.assert_called_once()
+
+    def test_choose_launch_mode_returns_console(self) -> None:
+        with mock.patch("builtins.input", return_value="2"):
+            self.assertEqual(choose_launch_mode(), "console")
 
 
 if __name__ == "__main__":

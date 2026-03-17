@@ -49,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("restart-vpn", help="Restart the WireGuard service.")
     subparsers.add_parser("system-info", help="Show detected host operating system information.")
     subparsers.add_parser("show-config", help="Show current editable VPN settings.")
+    subparsers.add_parser("console", help="Open the modern console interface.")
 
     configure_parser = subparsers.add_parser(
         "configure-vpn",
@@ -240,13 +241,57 @@ def run_interactive_menu(manager: WireGuardManager) -> int:
             print(f"Error: {exc}")
 
 
+def run_gui_command(manager: WireGuardManager) -> int:
+    """Start the Tk desktop GUI."""
+
+    from src.gui_app import run_gui_app
+
+    try:
+        run_gui_app(manager)
+    except tk.TclError as exc:
+        raise VPNManagerError(
+            "The desktop UI could not be started. "
+            "If you are on a server without a graphical session, use the console interface instead:\n"
+            "python3 src/main.py console"
+        ) from exc
+    return 0
+
+
+def choose_launch_mode() -> str:
+    """Prompt the user to choose GUI or console when no command was provided."""
+
+    host = detect_host_platform()
+    print()
+    print("WireGuard Manager")
+    print(f"Host: {host.summary}")
+    print("Choose interface:")
+    print("1. Graphical interface")
+    print("2. Console interface")
+
+    while True:
+        choice = input("Enter 1 or 2: ").strip()
+        if choice == "1":
+            return "gui"
+        if choice == "2":
+            return "console"
+        print("Invalid choice. Enter 1 or 2.")
+
+
+def should_prompt_for_launch_mode() -> bool:
+    """Return True when the process can ask the user to choose an interface."""
+
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
     """Execute a subcommand or open the interactive menu by default."""
 
     command = args.command or "gui"
 
-    if command == "menu":
-        return run_interactive_menu(manager)
+    if command in {"menu", "console"}:
+        from src.console_app import run_console_app
+
+        return run_console_app(manager, open_gui_callback=lambda: run_gui_command(manager))
     if command == "install-vpn":
         manager.install_wireguard()
         print("WireGuard installation and configuration completed.")
@@ -288,17 +333,7 @@ def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
         print("VPN restarted.")
         return 0
     if command in {"gui", "app"}:
-        from src.gui_app import run_gui_app
-
-        try:
-            run_gui_app(manager)
-        except tk.TclError as exc:
-            raise VPNManagerError(
-                "The desktop UI could not be started. "
-                "If you are on a server without a graphical session, use the CLI menu instead:\n"
-                "python3 src/main.py menu"
-            ) from exc
-        return 0
+        return run_gui_command(manager)
 
     raise VPNManagerError(f"Unknown command: {command}")
 
@@ -310,8 +345,10 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        manager = create_manager(verbose=args.verbose)
         host = detect_host_platform()
+        if args.command is None and should_prompt_for_launch_mode():
+            args.command = choose_launch_mode()
+        manager = create_manager(verbose=args.verbose)
         logging.getLogger("main").info("Detected host platform: %s", host.summary)
         return execute_command(args, manager)
     except VPNManagerError as exc:
