@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 import os
 import sqlite3
@@ -125,7 +126,7 @@ class ClientStorage:
         return connection
 
     @contextmanager
-    def _connection(self) -> sqlite3.Connection:
+    def _connection(self) -> Iterator[sqlite3.Connection]:
         connection = self._connect()
         try:
             yield connection
