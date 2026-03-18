@@ -4,15 +4,16 @@ import os
 import shutil
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
 from src.config import EditableVPNSettings, editable_settings_from_config, save_editable_settings
-from src.models import ConnectedClient, VPNManagerError
+from src.models import AuthMethod, ConnectedClient, VPNManagerError
 from src.utils import (
     detect_host_hardware,
     detect_host_location,
-    detect_local_ip_address,
     detect_host_platform,
+    detect_local_ip_address,
     format_bytes_binary,
 )
 from src.wireguard_manager import WireGuardManager
@@ -87,21 +88,47 @@ class ConsoleApp:
             elif choice == "5":
                 self._add_client()
             elif choice == "6":
-                self._remove_client()
+                self._disable_client()
             elif choice == "7":
-                self._list_clients()
+                self._enable_client()
             elif choice == "8":
-                self._show_connected_clients()
+                self._remove_client()
             elif choice == "9":
-                self._run_linux_action("Install VPN", self.manager.install_wireguard)
+                self._list_clients()
             elif choice == "10":
-                self._run_linux_action("Start VPN", self.manager.start_vpn)
+                self._show_client_export()
             elif choice == "11":
-                self._run_linux_action("Stop VPN", self.manager.stop_vpn)
+                self._show_connected_clients()
             elif choice == "12":
-                self._run_linux_action("Restart VPN", self.manager.restart_vpn)
+                self._validate_environment()
             elif choice == "13":
+                self._create_backup()
+            elif choice == "14":
+                self._restore_backup()
+            elif choice == "15":
+                self._list_backups()
+            elif choice == "16":
+                self._show_audit_log()
+            elif choice == "17":
+                self._import_existing_config()
+            elif choice == "18":
+                self._configure_remote_profile()
+            elif choice == "19":
+                self._test_remote_connection()
+            elif choice == "20":
+                self._clear_remote_profile()
+            elif choice == "21":
+                self._run_control_action("Install VPN", self.manager.install_wireguard)
+            elif choice == "22":
+                self._run_control_action("Start VPN", self.manager.start_vpn)
+            elif choice == "23":
+                self._run_control_action("Stop VPN", self.manager.stop_vpn)
+            elif choice == "24":
+                self._run_control_action("Restart VPN", self.manager.restart_vpn)
+            elif choice == "25":
                 self._open_gui()
+            elif choice == "26":
+                self._run_setup_wizard()
             else:
                 self._pause("Unknown option.")
 
@@ -120,6 +147,7 @@ class ConsoleApp:
         clients = self.manager.list_clients_with_status()
         summary_lines = [
             f"Host summary      : {self.host.summary}",
+            f"Control target    : {self.manager.control_target_summary()}",
             f"Location          : {self.location.summary}",
             f"Local IP          : {self.local_ip_address or 'Unavailable'}",
             f"Public IP         : {self.location.public_ip or 'Unavailable'}",
@@ -136,9 +164,9 @@ class ConsoleApp:
             f"Service state     : {service_state}",
             f"Total clients     : {len(clients)}",
             (
-                "Local control     : supported"
-                if self.host.local_wireguard_supported
-                else "Local control     : use Ubuntu host or future SSH mode"
+                "Control available : yes"
+                if self.manager.can_control_vpn()
+                else "Control available : no"
             ),
         ]
         self._panel("Status", summary_lines, tone="teal")
@@ -149,14 +177,27 @@ class ConsoleApp:
             "3  Show VPN settings",
             "4  Edit VPN settings",
             "5  Add client",
-            "6  Remove client",
-            "7  List clients",
-            "8  Show connected peers",
-            f"9  Install VPN{' (Linux host only)' if not self.host.local_wireguard_supported else ''}",
-            f"10 Start VPN{' (Linux host only)' if not self.host.local_wireguard_supported else ''}",
-            f"11 Stop VPN{' (Linux host only)' if not self.host.local_wireguard_supported else ''}",
-            f"12 Restart VPN{' (Linux host only)' if not self.host.local_wireguard_supported else ''}",
-            "13 Open graphical interface",
+            "6  Disable client",
+            "7  Enable client",
+            "8  Remove client",
+            "9  List clients",
+            "10 Show client export",
+            "11 Show connected peers",
+            "12 Validate environment",
+            "13 Create backup",
+            "14 Restore backup",
+            "15 List backups",
+            "16 Show audit log",
+            "17 Import existing config",
+            "18 Configure remote SSH",
+            "19 Test remote connection",
+            "20 Clear remote profile",
+            "21 Install VPN",
+            "22 Start VPN",
+            "23 Stop VPN",
+            "24 Restart VPN",
+            "25 Open graphical interface",
+            "26 Run setup wizard",
             "0  Exit",
         ]
         self._panel("Actions", menu_lines, tone="amber")
@@ -169,6 +210,7 @@ class ConsoleApp:
             "Dashboard",
             [
                 f"Host platform     : {self.host.summary}",
+                f"Control target    : {self.manager.control_target_summary()}",
                 f"Location          : {self.location.summary}",
                 f"Local IP          : {self.local_ip_address or 'Unavailable'}",
                 f"Public IP         : {self.location.public_ip or 'Unavailable'}",
@@ -203,6 +245,7 @@ class ConsoleApp:
                 f"Release           : {self.host.release}",
                 f"Version           : {self.host.version}",
                 f"Architecture      : {self.host.machine}",
+                f"Control target    : {self.manager.control_target_summary()}",
                 f"Location          : {self.location.summary}",
                 f"Local IP          : {self.local_ip_address or 'Unavailable'}",
                 f"Timezone          : {self.location.timezone or 'Unavailable'}",
@@ -216,9 +259,9 @@ class ConsoleApp:
                 f"CPU cores         : {self._cpu_cores_summary()}",
                 f"GPU cores         : {self._gpu_cores_summary()}",
                 (
-                    "Local control     : supported"
-                    if self.host.local_wireguard_supported
-                    else "Local control     : not available on this host"
+                    "Control available : yes"
+                    if self.manager.can_control_vpn()
+                    else "Control available : no"
                 ),
             ],
             tone="mint",
@@ -260,9 +303,7 @@ class ConsoleApp:
                 endpoint=self._prompt_with_default("Endpoint", current.endpoint),
                 interface_name=self._prompt_with_default("Interface name", current.interface_name),
                 server_address=self._prompt_with_default("Server address", current.server_address),
-                server_port=int(
-                    self._prompt_with_default("Server port", str(current.server_port))
-                ),
+                server_port=int(self._prompt_with_default("Server port", str(current.server_port))),
                 public_interface=self._prompt_with_default(
                     "Public interface",
                     current.public_interface,
@@ -298,13 +339,56 @@ class ConsoleApp:
             self._pause("Client name is required.")
             return
 
+        email = input("Email (optional): ").strip() or None
+        device = input("Device (optional): ").strip() or None
+        comment = input("Comment (optional): ").strip() or None
+        expiry_at = input("Expiry ISO timestamp (optional): ").strip() or None
+
         try:
-            client = self.manager.add_client(client_name)
+            client = self.manager.add_client(
+                client_name,
+                email=email,
+                device=device,
+                comment=comment,
+                expiry_at=expiry_at,
+            )
         except VPNManagerError as exc:
             self._pause(str(exc))
             return
 
-        self._pause(f"Client created: {client.name}\nConfig: {client.config_path}")
+        self._pause(
+            f"Client created: {client.name}\n"
+            f"Config: {client.config_path}\n"
+            f"QR: {client.qr_code_path or 'Unavailable'}"
+        )
+
+    def _disable_client(self) -> None:
+        client_name = input("Client name to disable: ").strip()
+        if not client_name:
+            self._pause("Client name is required.")
+            return
+
+        try:
+            self.manager.disable_client(client_name)
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+
+        self._pause(f"Client disabled: {client_name}")
+
+    def _enable_client(self) -> None:
+        client_name = input("Client name to enable: ").strip()
+        if not client_name:
+            self._pause("Client name is required.")
+            return
+
+        try:
+            self.manager.enable_client(client_name)
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+
+        self._pause(f"Client enabled: {client_name}")
 
     def _remove_client(self) -> None:
         client_name = input("Client name to remove: ").strip()
@@ -334,8 +418,8 @@ class ConsoleApp:
 
         lines = [
             (
-                f"{client.name:<18} {client.address:<16} "
-                f"{'connected' if is_connected else 'idle':<10} "
+                f"{client.name:<16} {client.address:<16} "
+                f"{client.status.value:<10} {'connected' if is_connected else 'idle':<10} "
                 f"{_format_iso(client.created_at)}"
             )
             for client, is_connected in clients
@@ -343,12 +427,38 @@ class ConsoleApp:
         self._panel("Clients", lines, tone="teal")
         self._pause()
 
+    def _show_client_export(self) -> None:
+        client_name = input("Client name: ").strip()
+        if not client_name:
+            self._pause("Client name is required.")
+            return
+
+        try:
+            client = self.manager.storage.get_client(client_name)
+            if client is None:
+                raise VPNManagerError(f"Client '{client_name}' was not found.")
+            config_text = self.manager.get_client_config_text(client_name)
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+
+        lines = [
+            f"Client            : {client.name}",
+            f"Config path       : {client.config_path or 'Unavailable'}",
+            f"QR path           : {client.qr_code_path or 'Unavailable'}",
+            "",
+            *config_text.splitlines(),
+        ]
+        self._clear()
+        self._panel("Client Export", lines, tone="mint")
+        self._pause()
+
     def _show_connected_clients(self) -> None:
         self._clear()
-        if not self.host.local_wireguard_supported:
+        if not self.manager.can_control_vpn():
             self._panel(
                 "Connected Peers",
-                ["Connected peer lookup is available only on the Ubuntu WireGuard host."],
+                ["Connected peer lookup requires a Linux host or configured remote SSH mode."],
                 tone="coral",
             )
             self._pause()
@@ -370,12 +480,143 @@ class ConsoleApp:
         self._panel("Connected Peers", lines, tone="mint")
         self._pause()
 
-    def _run_linux_action(self, label: str, action: Callable[[], None]) -> None:
-        if not self.host.local_wireguard_supported:
-            self._pause(
-                f"{label} is available only on the Ubuntu WireGuard host. "
-                "Use the graphical client on macOS only for local file/config tasks."
+    def _validate_environment(self) -> None:
+        issues = self.manager.validate_environment()
+        self._clear()
+        if not issues:
+            self._panel("Validation", ["Validation passed with no issues."], tone="mint")
+            self._pause()
+            return
+        lines = [f"[{issue.severity.value}] {issue.code}: {issue.message}" for issue in issues]
+        self._panel("Validation", lines, tone="amber")
+        self._pause()
+
+    def _create_backup(self) -> None:
+        note = input("Backup note (optional): ").strip() or None
+        try:
+            backup = self.manager.create_backup(note=note)
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+        self._pause(f"Backup created:\n{backup.archive_path}")
+
+    def _restore_backup(self) -> None:
+        archive_path = input("Backup archive path: ").strip()
+        if not archive_path:
+            self._pause("Backup archive path is required.")
+            return
+
+        apply_remote = input("Apply remote config from backup if present? [y/N]: ").strip().lower()
+        try:
+            self.manager.restore_backup(
+                Path(archive_path),
+                apply_remote=apply_remote in {"y", "yes"},
             )
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+        self._pause("Backup restored.")
+
+    def _list_backups(self) -> None:
+        backups = self.manager.list_backups()
+        self._clear()
+        if not backups:
+            self._panel("Backups", ["No backups have been created yet."], tone="amber")
+            self._pause()
+            return
+        lines = [
+            f"{Path(backup.archive_path).name:<34} {backup.scope:<8} {backup.created_at}"
+            for backup in backups
+        ]
+        self._panel("Backups", lines, tone="teal")
+        self._pause()
+
+    def _show_audit_log(self) -> None:
+        entries = self.manager.list_audit_logs(40)
+        self._clear()
+        if not entries:
+            self._panel("Audit Log", ["Audit log is empty."], tone="amber")
+            self._pause()
+            return
+        lines: list[str] = []
+        for entry in entries:
+            lines.append(
+                f"{entry.timestamp} | {entry.result.upper():<7} | {entry.action:<20} | {entry.target}"
+            )
+            if entry.error_details:
+                lines.append(f"  error: {entry.error_details}")
+        self._panel("Audit Log", lines, tone="mint")
+        self._pause()
+
+    def _import_existing_config(self) -> None:
+        path_value = input("Config path (leave empty for current system config): ").strip()
+        try:
+            count = self.manager.import_existing_config(Path(path_value) if path_value else None)
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+        self._pause(f"Imported peers: {count}")
+
+    def _configure_remote_profile(self) -> None:
+        self._clear()
+        self._panel(
+            "Remote SSH Profile",
+            [
+                "Configure Ubuntu remote management over SSH.",
+                "Host key verification uses system known_hosts and optional fingerprint pinning.",
+            ],
+            tone="coral",
+        )
+        host = input("Remote host: ").strip()
+        username = input("SSH username: ").strip()
+        port = int(input("SSH port [22]: ").strip() or "22")
+        auth_method = (input("Auth method [ssh_key/password] [ssh_key]: ").strip() or "ssh_key").lower()
+        private_key_path = None
+        password = None
+        if auth_method == "ssh_key":
+            private_key_path = input("Private key path [~/.ssh/id_ed25519]: ").strip() or "~/.ssh/id_ed25519"
+        else:
+            password = input("SSH password: ").strip()
+        sudo_password = input("Sudo password (optional): ").strip() or None
+        fingerprint = input("Known host fingerprint (optional hex): ").strip() or None
+        use_sudo = input("Use sudo on remote host? [Y/n]: ").strip().lower() not in {"n", "no"}
+
+        try:
+            self.manager.save_remote_profile(
+                host=host,
+                username=username,
+                port=port,
+                auth_method=AuthMethod(auth_method),
+                private_key_path=private_key_path,
+                password=password,
+                sudo_password=sudo_password,
+                known_host_fingerprint=fingerprint,
+                use_sudo=use_sudo,
+            )
+        except (ValueError, VPNManagerError) as exc:
+            self._pause(str(exc))
+            return
+
+        self._pause(f"Remote profile saved for {username}@{host}:{port}")
+
+    def _test_remote_connection(self) -> None:
+        try:
+            payload = self.manager.test_remote_connection()
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+        self._clear()
+        lines = [f"{key:<18}: {value}" for key, value in sorted(payload.items())]
+        self._panel("Remote Connection", lines, tone="mint")
+        self._pause()
+
+    def _clear_remote_profile(self) -> None:
+        self.manager.clear_remote_profile()
+        self._pause("Remote profile cleared.")
+
+    def _run_control_action(self, label: str, action: Callable[[], None]) -> None:
+        if not self.manager.can_control_vpn():
+            self._pause(f"{label} requires a Linux host or a configured remote SSH profile.")
             return
 
         try:
@@ -397,8 +638,22 @@ class ConsoleApp:
             self._pause(str(exc))
             return
 
+    def _run_setup_wizard(self) -> None:
+        from src.main import run_first_run_wizard
+
+        try:
+            run_first_run_wizard(self.manager)
+        except VPNManagerError as exc:
+            self._pause(str(exc))
+            return
+        self.host = detect_host_platform()
+        self.hardware = detect_host_hardware()
+        self.location = detect_host_location()
+        self.local_ip_address = detect_local_ip_address()
+        self._pause("Setup wizard completed.")
+
     def _safe_service_state(self) -> str:
-        if not self.host.local_wireguard_supported:
+        if not self.manager.can_control_vpn():
             return "Managed from Ubuntu host"
         try:
             return "Active" if self.manager.is_service_active() else "Stopped"
