@@ -15,7 +15,7 @@ from src.config import load_config
 from src.config import editable_settings_from_config, save_editable_settings
 from src.models import ConnectedClient, VPNManagerError
 from src.storage import ClientStorage
-from src.utils import detect_host_platform, setup_logging
+from src.utils import detect_host_location, detect_host_platform, setup_logging
 from src.wireguard_manager import WireGuardManager
 
 
@@ -129,11 +129,18 @@ def print_host_platform_info() -> None:
     """Print normalized host OS information for the current machine."""
 
     host = detect_host_platform()
+    location = detect_host_location()
     print(f"Host OS: {host.display_name}")
     print(f"System: {host.system}")
     print(f"Release: {host.release}")
     print(f"Version: {host.version}")
     print(f"Architecture: {host.machine}")
+    print(f"Location: {location.summary}")
+    print(f"Timezone: {location.timezone or 'Unavailable'}")
+    print(f"Public IP: {location.public_ip or 'Unavailable'}")
+    print(f"Latitude: {location.latitude_summary}")
+    print(f"Longitude: {location.longitude_summary}")
+    print(f"Coordinates: {location.coordinates_summary}")
     print(
         "Local WireGuard control: "
         + ("supported" if host.local_wireguard_supported else "not supported on this host")
@@ -189,9 +196,13 @@ def run_interactive_menu(manager: WireGuardManager) -> int:
     """Run the numbered terminal menu requested for this project."""
 
     host = detect_host_platform()
+    location = detect_host_location()
     while True:
         print("\nWireGuard VPN Manager")
         print(f"Host: {host.summary}")
+        print(f"Location: {location.summary}")
+        print(f"Latitude: {location.latitude_summary}")
+        print(f"Longitude: {location.longitude_summary}")
         if not host.local_wireguard_supported:
             print("Note: local WireGuard service control is disabled on this host.")
         print("1. Install VPN")

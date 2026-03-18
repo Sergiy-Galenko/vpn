@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import platform
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from src.models import VPNManagerError
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - optional dependency fallback
+    certifi = None
 
 
 CLIENT_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
@@ -48,6 +58,56 @@ class HostHardwareInfo:
     gpu_cores: int | None
 
 
+@dataclass(slots=True, frozen=True)
+class HostLocationInfo:
+    """Best-effort public IP geolocation for the current host."""
+
+    available: bool
+    city: str | None
+    region: str | None
+    country: str | None
+    timezone: str | None
+    public_ip: str | None
+    latitude: float | None
+    longitude: float | None
+    source: str
+    error: str | None = None
+
+    @property
+    def summary(self) -> str:
+        if not self.available:
+            return "Unavailable"
+
+        parts = _dedupe_location_parts([self.city, self.region, self.country])
+        return ", ".join(parts) if parts else "Approximate location detected"
+
+    @property
+    def short_summary(self) -> str:
+        if not self.available:
+            return "Location unavailable"
+
+        parts = _dedupe_location_parts([self.city, self.country])
+        return ", ".join(parts) if parts else self.summary
+
+    @property
+    def coordinates_summary(self) -> str:
+        if self.latitude is None or self.longitude is None:
+            return "Unavailable"
+        return f"{self.latitude:.4f}, {self.longitude:.4f}"
+
+    @property
+    def latitude_summary(self) -> str:
+        if self.latitude is None:
+            return "Unavailable"
+        return f"{self.latitude:.6f}"
+
+    @property
+    def longitude_summary(self) -> str:
+        if self.longitude is None:
+            return "Unavailable"
+        return f"{self.longitude:.6f}"
+
+
 def detect_host_platform() -> HostPlatformInfo:
     """Detect the current host OS and normalize user-facing metadata."""
 
@@ -75,6 +135,83 @@ def detect_host_platform() -> HostPlatformInfo:
         version=version,
         machine=machine,
         local_wireguard_supported=system == "Linux",
+    )
+
+
+@lru_cache(maxsize=1)
+def detect_host_location(timeout_sec: float = 1.5) -> HostLocationInfo:
+    """Detect host location using best-effort public IP geolocation."""
+
+    url = "https://ipwho.is/"
+    request = urllib_request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "WGDesk/0.1",
+        },
+    )
+    ssl_context = _build_ssl_context()
+
+    try:
+        with urllib_request.urlopen(
+            request,
+            timeout=timeout_sec,
+            context=ssl_context,
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (
+        TimeoutError,
+        OSError,
+        ValueError,
+        UnicodeDecodeError,
+        urllib_error.URLError,
+    ) as exc:
+        return HostLocationInfo(
+            available=False,
+            city=None,
+            region=None,
+            country=None,
+            timezone=None,
+            public_ip=None,
+            latitude=None,
+            longitude=None,
+            source="ipwho.is",
+            error=str(exc),
+        )
+
+    success = bool(payload.get("success", True))
+    if not success:
+        return HostLocationInfo(
+            available=False,
+            city=None,
+            region=None,
+            country=None,
+            timezone=None,
+            public_ip=None,
+            latitude=None,
+            longitude=None,
+            source="ipwho.is",
+            error=str(payload.get("message") or payload.get("reason") or "Lookup failed."),
+        )
+
+    timezone_value = payload.get("timezone")
+    timezone_name = None
+    if isinstance(timezone_value, dict):
+        timezone_name = timezone_value.get("id") or timezone_value.get("name")
+    elif isinstance(timezone_value, str):
+        timezone_name = timezone_value
+
+    return HostLocationInfo(
+        available=True,
+        city=_clean_optional_text(payload.get("city")),
+        region=_clean_optional_text(payload.get("region")),
+        country=_clean_optional_text(payload.get("country")),
+        timezone=_clean_optional_text(timezone_name),
+        public_ip=_clean_optional_text(payload.get("ip")),
+        latitude=_parse_optional_float(payload.get("latitude")),
+        longitude=_parse_optional_float(payload.get("longitude")),
+        source="ipwho.is",
+        error=None,
     )
 
 
@@ -478,6 +615,38 @@ def _parse_optional_int(value: str | None) -> int | None:
     return int(match.group(1))
 
 
+def _parse_optional_float(value: object) -> float | None:
+    if value in {None, ""}:
+        return None
+    try:
+        return float(str(value))
+    except ValueError:
+        return None
+
+
+def _clean_optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _dedupe_location_parts(parts: Sequence[str | None]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+
+    for part in parts:
+        if not part:
+            continue
+        key = part.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(part)
+
+    return normalized
+
+
 def _run_optional_command(command: Sequence[str]) -> str | None:
     try:
         result = subprocess.run(
@@ -494,3 +663,13 @@ def _run_optional_command(command: Sequence[str]) -> str | None:
         return None
     output = result.stdout.strip()
     return output or None
+
+
+def _build_ssl_context() -> ssl.SSLContext | None:
+    if certifi is None:
+        return None
+
+    try:
+        return ssl.create_default_context(cafile=certifi.where())
+    except (OSError, ssl.SSLError):
+        return None

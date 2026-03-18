@@ -14,9 +14,10 @@ from typing import Callable
 from src.config import EditableVPNSettings, editable_settings_from_config, save_editable_settings
 from src.models import ClientRecord, ConnectedClient, VPNManagerError
 from src.utils import (
+    HostLocationInfo,
     HostPlatformInfo,
+    detect_host_location,
     detect_host_platform,
-    is_linux,
     is_root,
     linux_host_requirement_message,
 )
@@ -113,6 +114,7 @@ class VPNDesktopApp(tk.Tk):
         super().__init__()
         self.manager = manager
         self.host_platform: HostPlatformInfo = detect_host_platform()
+        self.host_location: HostLocationInfo = detect_host_location()
         self.task_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy_widgets: list[tk.Widget] = []
         self.linux_only_widgets: list[tk.Widget] = []
@@ -1129,7 +1131,8 @@ class VPNDesktopApp(tk.Tk):
         )
         self.hero_environment_var.set(
             f"{self.host_platform.display_name} {self.host_platform.release} | "
-            f"{self.host_platform.machine} | {'root' if is_root() else 'non-root'}"
+            f"{self.host_platform.machine} | {self.host_location.short_summary} | "
+            f"{'root' if is_root() else 'non-root'}"
         )
 
     def _update_overview(
@@ -1157,6 +1160,7 @@ class VPNDesktopApp(tk.Tk):
                     f"Interface: {self.manager.config.interface_name}",
                     f"Server address: {self.manager.config.server_interface}",
                     f"Public interface: {self.manager.config.public_interface}",
+                    f"Detected location: {self.host_location.summary}",
                     connected_note,
                     (
                         "This desktop is acting as a control client. "
@@ -1175,6 +1179,11 @@ class VPNDesktopApp(tk.Tk):
                     f"Platform: {self.host_platform.display_name}",
                     f"Release: {self.host_platform.release}",
                     f"Architecture: {self.host_platform.machine}",
+                    f"Location: {self.host_location.summary}",
+                    f"Timezone: {self.host_location.timezone or 'Unavailable'}",
+                    f"Public IP: {self.host_location.public_ip or 'Unavailable'}",
+                    f"Latitude: {self.host_location.latitude_summary}",
+                    f"Longitude: {self.host_location.longitude_summary}",
                     f"Root mode: {'yes' if is_root() else 'no'}",
                     f"Interface: {self.manager.config.interface_name}",
                     f"Server subnet: {self.manager.config.network}",

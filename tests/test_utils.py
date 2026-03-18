@@ -5,6 +5,7 @@ from collections import namedtuple
 from unittest import mock
 
 from src.utils import (
+    detect_host_location,
     detect_host_hardware,
     detect_host_platform,
     format_bytes_binary,
@@ -92,6 +93,45 @@ Graphics/Displays:
     def test_format_bytes_binary_returns_human_friendly_size(self) -> None:
         self.assertEqual(format_bytes_binary(8589934592), "8.0 GiB")
         self.assertEqual(format_bytes_binary(None), "Unavailable")
+
+
+class HostLocationDetectionTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        detect_host_location.cache_clear()
+
+    def test_detect_host_location_parses_ipwhois_payload(self) -> None:
+        payload = (
+            '{"success":true,"ip":"203.0.113.9","city":"Kyiv","region":"Kyiv City",'
+            '"country":"Ukraine","latitude":50.45,"longitude":30.523,"timezone":{"id":"Europe/Kyiv"}}'
+        ).encode("utf-8")
+
+        response = mock.MagicMock()
+        response.read.return_value = payload
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+
+        with mock.patch("src.utils.urllib_request.urlopen", return_value=response):
+            location = detect_host_location()
+
+        self.assertTrue(location.available)
+        self.assertEqual(location.city, "Kyiv")
+        self.assertEqual(location.country, "Ukraine")
+        self.assertEqual(location.timezone, "Europe/Kyiv")
+        self.assertEqual(location.public_ip, "203.0.113.9")
+        self.assertEqual(location.summary, "Kyiv, Kyiv City, Ukraine")
+        self.assertEqual(location.latitude_summary, "50.450000")
+        self.assertEqual(location.longitude_summary, "30.523000")
+        self.assertEqual(location.coordinates_summary, "50.4500, 30.5230")
+
+    def test_detect_host_location_returns_unavailable_on_network_error(self) -> None:
+        with mock.patch(
+            "src.utils.urllib_request.urlopen",
+            side_effect=OSError("network unreachable"),
+        ):
+            location = detect_host_location()
+
+        self.assertFalse(location.available)
+        self.assertEqual(location.summary, "Unavailable")
 
 
 if __name__ == "__main__":

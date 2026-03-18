@@ -8,7 +8,12 @@ from typing import Callable
 
 from src.config import EditableVPNSettings, editable_settings_from_config, save_editable_settings
 from src.models import ConnectedClient, VPNManagerError
-from src.utils import detect_host_hardware, detect_host_platform, format_bytes_binary
+from src.utils import (
+    detect_host_hardware,
+    detect_host_location,
+    detect_host_platform,
+    format_bytes_binary,
+)
 from src.wireguard_manager import WireGuardManager
 
 
@@ -57,6 +62,7 @@ class ConsoleApp:
         self.open_gui_callback = open_gui_callback
         self.host = detect_host_platform()
         self.hardware = detect_host_hardware()
+        self.location = detect_host_location()
         self.use_ansi = _supports_ansi()
 
     def run(self) -> int:
@@ -112,6 +118,9 @@ class ConsoleApp:
         clients = self.manager.list_clients_with_status()
         summary_lines = [
             f"Host summary      : {self.host.summary}",
+            f"Location          : {self.location.summary}",
+            f"Latitude          : {self.location.latitude_summary}",
+            f"Longitude         : {self.location.longitude_summary}",
             f"Processor         : {self.hardware.cpu_name}",
             f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
             f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
@@ -156,6 +165,9 @@ class ConsoleApp:
             "Dashboard",
             [
                 f"Host platform     : {self.host.summary}",
+                f"Location          : {self.location.summary}",
+                f"Latitude          : {self.location.latitude_summary}",
+                f"Longitude         : {self.location.longitude_summary}",
                 f"Processor         : {self.hardware.cpu_name}",
                 f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
                 f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
@@ -185,6 +197,12 @@ class ConsoleApp:
                 f"Release           : {self.host.release}",
                 f"Version           : {self.host.version}",
                 f"Architecture      : {self.host.machine}",
+                f"Location          : {self.location.summary}",
+                f"Timezone          : {self.location.timezone or 'Unavailable'}",
+                f"Public IP         : {self.location.public_ip or 'Unavailable'}",
+                f"Latitude          : {self.location.latitude_summary}",
+                f"Longitude         : {self.location.longitude_summary}",
+                f"Coordinates       : {self.location.coordinates_summary}",
                 f"Processor         : {self.hardware.cpu_name}",
                 f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
                 f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
