@@ -17,6 +17,7 @@ from src.utils import (
     HostLocationInfo,
     HostPlatformInfo,
     detect_host_location,
+    detect_local_ip_address,
     detect_host_platform,
     is_root,
     linux_host_requirement_message,
@@ -115,6 +116,7 @@ class VPNDesktopApp(tk.Tk):
         self.manager = manager
         self.host_platform: HostPlatformInfo = detect_host_platform()
         self.host_location: HostLocationInfo = detect_host_location()
+        self.local_ip_address: str | None = detect_local_ip_address()
         self.task_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.busy_widgets: list[tk.Widget] = []
         self.linux_only_widgets: list[tk.Widget] = []
@@ -1131,7 +1133,8 @@ class VPNDesktopApp(tk.Tk):
         )
         self.hero_environment_var.set(
             f"{self.host_platform.display_name} {self.host_platform.release} | "
-            f"{self.host_platform.machine} | {self.host_location.short_summary} | "
+            f"{self.host_platform.machine} | {self.local_ip_address or 'no local IP'} | "
+            f"{self.host_location.short_summary} | "
             f"{'root' if is_root() else 'non-root'}"
         )
 
@@ -1180,6 +1183,7 @@ class VPNDesktopApp(tk.Tk):
                     f"Release: {self.host_platform.release}",
                     f"Architecture: {self.host_platform.machine}",
                     f"Location: {self.host_location.summary}",
+                    f"Local IP: {self.local_ip_address or 'Unavailable'}",
                     f"Timezone: {self.host_location.timezone or 'Unavailable'}",
                     f"Public IP: {self.host_location.public_ip or 'Unavailable'}",
                     f"Latitude: {self.host_location.latitude_summary}",

@@ -7,6 +7,7 @@ import platform
 import re
 import shlex
 import shutil
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -213,6 +214,18 @@ def detect_host_location(timeout_sec: float = 1.5) -> HostLocationInfo:
         source="ipwho.is",
         error=None,
     )
+
+
+def detect_local_ip_address() -> str | None:
+    """Detect the current host's primary local IP address."""
+
+    for address in (
+        _detect_local_ip_via_udp_probe(),
+        _detect_local_ip_via_hostname(),
+    ):
+        if address and not address.startswith("127."):
+            return address
+    return None
 
 
 def detect_host_hardware() -> HostHardwareInfo:
@@ -672,4 +685,22 @@ def _build_ssl_context() -> ssl.SSLContext | None:
     try:
         return ssl.create_default_context(cafile=certifi.where())
     except (OSError, ssl.SSLError):
+        return None
+
+
+def _detect_local_ip_via_udp_probe() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            address = probe.getsockname()[0]
+            return address or None
+    except OSError:
+        return None
+
+
+def _detect_local_ip_via_hostname() -> str | None:
+    try:
+        hostname = socket.gethostname()
+        return socket.gethostbyname(hostname)
+    except OSError:
         return None

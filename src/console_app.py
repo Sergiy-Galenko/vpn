@@ -11,6 +11,7 @@ from src.models import ConnectedClient, VPNManagerError
 from src.utils import (
     detect_host_hardware,
     detect_host_location,
+    detect_local_ip_address,
     detect_host_platform,
     format_bytes_binary,
 )
@@ -63,6 +64,7 @@ class ConsoleApp:
         self.host = detect_host_platform()
         self.hardware = detect_host_hardware()
         self.location = detect_host_location()
+        self.local_ip_address = detect_local_ip_address()
         self.use_ansi = _supports_ansi()
 
     def run(self) -> int:
@@ -119,6 +121,8 @@ class ConsoleApp:
         summary_lines = [
             f"Host summary      : {self.host.summary}",
             f"Location          : {self.location.summary}",
+            f"Local IP          : {self.local_ip_address or 'Unavailable'}",
+            f"Public IP         : {self.location.public_ip or 'Unavailable'}",
             f"Latitude          : {self.location.latitude_summary}",
             f"Longitude         : {self.location.longitude_summary}",
             f"Processor         : {self.hardware.cpu_name}",
@@ -166,6 +170,8 @@ class ConsoleApp:
             [
                 f"Host platform     : {self.host.summary}",
                 f"Location          : {self.location.summary}",
+                f"Local IP          : {self.local_ip_address or 'Unavailable'}",
+                f"Public IP         : {self.location.public_ip or 'Unavailable'}",
                 f"Latitude          : {self.location.latitude_summary}",
                 f"Longitude         : {self.location.longitude_summary}",
                 f"Processor         : {self.hardware.cpu_name}",
@@ -198,6 +204,7 @@ class ConsoleApp:
                 f"Version           : {self.host.version}",
                 f"Architecture      : {self.host.machine}",
                 f"Location          : {self.location.summary}",
+                f"Local IP          : {self.local_ip_address or 'Unavailable'}",
                 f"Timezone          : {self.location.timezone or 'Unavailable'}",
                 f"Public IP         : {self.location.public_ip or 'Unavailable'}",
                 f"Latitude          : {self.location.latitude_summary}",

@@ -8,6 +8,7 @@ from src.utils import (
     detect_host_location,
     detect_host_hardware,
     detect_host_platform,
+    detect_local_ip_address,
     format_bytes_binary,
     linux_host_requirement_message,
 )
@@ -132,6 +133,29 @@ class HostLocationDetectionTests(unittest.TestCase):
 
         self.assertFalse(location.available)
         self.assertEqual(location.summary, "Unavailable")
+
+
+class LocalIpDetectionTests(unittest.TestCase):
+    def test_detect_local_ip_address_uses_udp_probe_result(self) -> None:
+        fake_socket = mock.MagicMock()
+        fake_socket.getsockname.return_value = ("192.168.0.42", 51515)
+        fake_socket.__enter__.return_value = fake_socket
+        fake_socket.__exit__.return_value = False
+
+        with mock.patch("src.utils.socket.socket", return_value=fake_socket):
+            address = detect_local_ip_address()
+
+        self.assertEqual(address, "192.168.0.42")
+
+    def test_detect_local_ip_address_falls_back_to_hostname_lookup(self) -> None:
+        with (
+            mock.patch("src.utils.socket.socket", side_effect=OSError("no route")),
+            mock.patch("src.utils.socket.gethostname", return_value="vpn-host"),
+            mock.patch("src.utils.socket.gethostbyname", return_value="10.0.0.8"),
+        ):
+            address = detect_local_ip_address()
+
+        self.assertEqual(address, "10.0.0.8")
 
 
 if __name__ == "__main__":
