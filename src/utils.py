@@ -8,10 +8,11 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Any
 
 from src.models import VPNManagerError
 
@@ -33,6 +34,18 @@ class HostPlatformInfo:
     @property
     def summary(self) -> str:
         return f"{self.display_name} {self.release} | {self.machine}"
+
+
+@dataclass(slots=True, frozen=True)
+class HostHardwareInfo:
+    """Best-effort hardware information for the current host."""
+
+    cpu_name: str
+    memory_total_bytes: int | None
+    storage_total_bytes: int | None
+    cpu_physical_cores: int | None
+    cpu_logical_cores: int | None
+    gpu_cores: int | None
 
 
 def detect_host_platform() -> HostPlatformInfo:
@@ -63,6 +76,47 @@ def detect_host_platform() -> HostPlatformInfo:
         machine=machine,
         local_wireguard_supported=system == "Linux",
     )
+
+
+def detect_host_hardware() -> HostHardwareInfo:
+    """Detect host hardware details for CLI and GUI status views."""
+
+    system = platform.system() or "Unknown"
+    storage_total_bytes = _detect_storage_total_bytes()
+
+    if system == "Darwin":
+        return _detect_macos_hardware(storage_total_bytes)
+    if system == "Linux":
+        return _detect_linux_hardware(storage_total_bytes)
+    if system == "Windows":
+        return _detect_windows_hardware(storage_total_bytes)
+
+    logical_cores = os.cpu_count()
+    return HostHardwareInfo(
+        cpu_name=platform.processor() or "Unknown CPU",
+        memory_total_bytes=None,
+        storage_total_bytes=storage_total_bytes,
+        cpu_physical_cores=logical_cores,
+        cpu_logical_cores=logical_cores,
+        gpu_cores=None,
+    )
+
+
+def format_bytes_binary(value: int | None) -> str:
+    """Render bytes with binary units for human-readable status output."""
+
+    if value is None or value < 0:
+        return "Unavailable"
+
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} PiB"
 
 
 def is_linux() -> bool:
@@ -216,3 +270,227 @@ def utc_now_iso() -> str:
     """Return a stable UTC timestamp string."""
 
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _detect_storage_total_bytes() -> int | None:
+    try:
+        return shutil.disk_usage(Path.home()).total
+    except OSError:
+        return None
+
+
+def _detect_macos_hardware(storage_total_bytes: int | None) -> HostHardwareInfo:
+    profiler_output = _run_optional_command(
+        ["system_profiler", "SPHardwareDataType", "SPDisplaysDataType"]
+    )
+    cpu_name = _run_optional_command(["sysctl", "-n", "machdep.cpu.brand_string"])
+    memory_total_bytes = _parse_optional_int(_run_optional_command(["sysctl", "-n", "hw.memsize"]))
+    physical_cores = _parse_optional_int(
+        _run_optional_command(["sysctl", "-n", "hw.physicalcpu"])
+    )
+    logical_cores = _parse_optional_int(_run_optional_command(["sysctl", "-n", "hw.logicalcpu"]))
+    gpu_cores: int | None = None
+
+    if profiler_output:
+        parsed_cpu_name, parsed_memory_bytes, parsed_cpu_cores, parsed_gpu_cores = (
+            _parse_macos_system_profiler_output(profiler_output)
+        )
+        cpu_name = cpu_name or parsed_cpu_name
+        memory_total_bytes = memory_total_bytes or parsed_memory_bytes
+        physical_cores = physical_cores or parsed_cpu_cores
+        gpu_cores = parsed_gpu_cores
+
+    fallback_cores = os.cpu_count()
+    return HostHardwareInfo(
+        cpu_name=cpu_name or "Apple Silicon / Intel CPU",
+        memory_total_bytes=memory_total_bytes,
+        storage_total_bytes=storage_total_bytes,
+        cpu_physical_cores=physical_cores or fallback_cores,
+        cpu_logical_cores=logical_cores or fallback_cores,
+        gpu_cores=gpu_cores,
+    )
+
+
+def _detect_linux_hardware(storage_total_bytes: int | None) -> HostHardwareInfo:
+    cpu_name = platform.processor() or "Unknown CPU"
+    memory_total_bytes: int | None = None
+    physical_cores: int | None = None
+    logical_cores = os.cpu_count()
+
+    try:
+        cpuinfo = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        cpuinfo = ""
+
+    model_match = re.search(r"^model name\s*:\s*(.+)$", cpuinfo, flags=re.MULTILINE)
+    if model_match:
+        cpu_name = model_match.group(1).strip()
+
+    core_pairs = {
+        (physical_id, core_id)
+        for physical_id, core_id in re.findall(
+            r"physical id\s*:\s*(\d+).*?core id\s*:\s*(\d+)",
+            cpuinfo,
+            flags=re.DOTALL,
+        )
+    }
+    if core_pairs:
+        physical_cores = len(core_pairs)
+    else:
+        cores_match = re.search(r"^cpu cores\s*:\s*(\d+)$", cpuinfo, flags=re.MULTILINE)
+        if cores_match:
+            physical_cores = int(cores_match.group(1))
+
+    try:
+        meminfo = Path("/proc/meminfo").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        meminfo = ""
+
+    memory_match = re.search(r"^MemTotal:\s*(\d+)\s+kB$", meminfo, flags=re.MULTILINE)
+    if memory_match:
+        memory_total_bytes = int(memory_match.group(1)) * 1024
+
+    return HostHardwareInfo(
+        cpu_name=cpu_name,
+        memory_total_bytes=memory_total_bytes,
+        storage_total_bytes=storage_total_bytes,
+        cpu_physical_cores=physical_cores or logical_cores,
+        cpu_logical_cores=logical_cores,
+        gpu_cores=None,
+    )
+
+
+def _detect_windows_hardware(storage_total_bytes: int | None) -> HostHardwareInfo:
+    cpu_name = (
+        platform.processor()
+        or os.getenv("PROCESSOR_IDENTIFIER")
+        or "Unknown CPU"
+    )
+    logical_cores = os.cpu_count()
+    physical_cores = _parse_optional_int(
+        _run_optional_command(["wmic", "cpu", "get", "NumberOfCores", "/value"])
+        or ""
+    )
+    memory_total_bytes = _detect_windows_memory_total()
+
+    name_output = _run_optional_command(["wmic", "cpu", "get", "Name", "/value"])
+    if name_output:
+        match = re.search(r"Name=(.+)", name_output)
+        if match:
+            cpu_name = match.group(1).strip()
+
+    return HostHardwareInfo(
+        cpu_name=cpu_name,
+        memory_total_bytes=memory_total_bytes,
+        storage_total_bytes=storage_total_bytes,
+        cpu_physical_cores=physical_cores or logical_cores,
+        cpu_logical_cores=logical_cores,
+        gpu_cores=None,
+    )
+
+
+def _detect_windows_memory_total() -> int | None:
+    try:
+        import ctypes
+
+        class MemoryStatusEx(ctypes.Structure):
+            _fields_: list[tuple[str, Any]] = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(MemoryStatusEx)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.ullTotalPhys)
+    except (AttributeError, ImportError, OSError):
+        return None
+    return None
+
+
+def _parse_macos_system_profiler_output(
+    profiler_output: str,
+) -> tuple[str | None, int | None, int | None, int | None]:
+    cpu_name: str | None = None
+    memory_total_bytes: int | None = None
+    cpu_cores: int | None = None
+    gpu_cores: int | None = None
+
+    cpu_match = re.search(
+        r"^\s*(?:Chip|Processor Name):\s*(.+)$",
+        profiler_output,
+        flags=re.MULTILINE,
+    )
+    if cpu_match:
+        cpu_name = cpu_match.group(1).strip()
+
+    memory_match = re.search(r"^\s*Memory:\s*(.+)$", profiler_output, flags=re.MULTILINE)
+    if memory_match:
+        memory_total_bytes = _parse_size_to_bytes(memory_match.group(1).strip())
+
+    cores_matches = [
+        int(match)
+        for match in re.findall(
+            r"^\s*Total Number of Cores:\s*(\d+)",
+            profiler_output,
+            flags=re.MULTILINE,
+        )
+    ]
+    if cores_matches:
+        cpu_cores = cores_matches[0]
+    if len(cores_matches) >= 2:
+        gpu_cores = cores_matches[1]
+
+    return cpu_name, memory_total_bytes, cpu_cores, gpu_cores
+
+
+def _parse_size_to_bytes(value: str) -> int | None:
+    match = re.match(r"^\s*(\d+(?:\.\d+)?)\s*([KMGTP]?B)\s*$", value, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    number = float(match.group(1))
+    unit = match.group(2).upper()
+    multipliers = {
+        "KB": 1024,
+        "MB": 1024**2,
+        "GB": 1024**3,
+        "TB": 1024**4,
+        "PB": 1024**5,
+        "B": 1,
+    }
+    return int(number * multipliers[unit])
+
+
+def _parse_optional_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = re.search(r"(\d+)", value)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _run_optional_command(command: Sequence[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            list(command),
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**os.environ, "LC_ALL": "C", "LANG": "C"},
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+    output = result.stdout.strip()
+    return output or None

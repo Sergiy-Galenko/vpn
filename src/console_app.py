@@ -8,7 +8,7 @@ from typing import Callable
 
 from src.config import EditableVPNSettings, editable_settings_from_config, save_editable_settings
 from src.models import ConnectedClient, VPNManagerError
-from src.utils import detect_host_platform
+from src.utils import detect_host_hardware, detect_host_platform, format_bytes_binary
 from src.wireguard_manager import WireGuardManager
 
 
@@ -56,6 +56,7 @@ class ConsoleApp:
         self.manager = manager
         self.open_gui_callback = open_gui_callback
         self.host = detect_host_platform()
+        self.hardware = detect_host_hardware()
         self.use_ansi = _supports_ansi()
 
     def run(self) -> int:
@@ -111,6 +112,11 @@ class ConsoleApp:
         clients = self.manager.list_clients_with_status()
         summary_lines = [
             f"Host summary      : {self.host.summary}",
+            f"Processor         : {self.hardware.cpu_name}",
+            f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
+            f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
+            f"CPU cores         : {self._cpu_cores_summary()}",
+            f"GPU cores         : {self._gpu_cores_summary()}",
             f"Endpoint          : {settings.endpoint}",
             f"Interface         : {settings.interface_name}",
             f"Server subnet     : {settings.server_address}",
@@ -150,6 +156,11 @@ class ConsoleApp:
             "Dashboard",
             [
                 f"Host platform     : {self.host.summary}",
+                f"Processor         : {self.hardware.cpu_name}",
+                f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
+                f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
+                f"CPU cores         : {self._cpu_cores_summary()}",
+                f"GPU cores         : {self._gpu_cores_summary()}",
                 f"Service state     : {self._safe_service_state()}",
                 f"Interface         : {self.manager.config.interface_name}",
                 f"Endpoint          : {self.manager.config.endpoint}",
@@ -174,6 +185,11 @@ class ConsoleApp:
                 f"Release           : {self.host.release}",
                 f"Version           : {self.host.version}",
                 f"Architecture      : {self.host.machine}",
+                f"Processor         : {self.hardware.cpu_name}",
+                f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
+                f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
+                f"CPU cores         : {self._cpu_cores_summary()}",
+                f"GPU cores         : {self._gpu_cores_summary()}",
                 (
                     "Local control     : supported"
                     if self.host.local_wireguard_supported
@@ -371,6 +387,23 @@ class ConsoleApp:
             f"{(peer.address or 'unknown'):<16} "
             f"{_format_unix(peer.latest_handshake)} | {peer.endpoint}"
         )
+
+    def _cpu_cores_summary(self) -> str:
+        physical = self.hardware.cpu_physical_cores
+        logical = self.hardware.cpu_logical_cores
+
+        if physical and logical and physical != logical:
+            return f"{physical} physical / {logical} logical"
+        if physical:
+            return f"{physical}"
+        if logical:
+            return f"{logical} logical"
+        return "Unavailable"
+
+    def _gpu_cores_summary(self) -> str:
+        if self.hardware.gpu_cores is None:
+            return "Unavailable"
+        return str(self.hardware.gpu_cores)
 
     def _style(self, text: str, tone: str, *, bold: bool = False) -> str:
         if not self.use_ansi:
