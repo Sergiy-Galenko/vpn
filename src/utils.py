@@ -143,7 +143,51 @@ def detect_host_platform() -> HostPlatformInfo:
 def detect_host_location(timeout_sec: float = 1.5) -> HostLocationInfo:
     """Detect host location using best-effort public IP geolocation."""
 
-    url = "https://ipwho.is/"
+    providers = (
+        ("ipwho.is", "https://ipwho.is/", _parse_ipwhois_payload),
+        ("ipapi.co", "https://ipapi.co/json/", _parse_ipapi_payload),
+    )
+    last_error = "Lookup failed."
+
+    for source, url, parser in providers:
+        try:
+            payload = _fetch_location_payload(url, timeout_sec)
+            location = parser(payload)
+        except VPNManagerError as exc:
+            last_error = str(exc)
+            continue
+        if location.available:
+            return location
+        if location.error:
+            last_error = location.error
+
+    return HostLocationInfo(
+        available=False,
+        city=None,
+        region=None,
+        country=None,
+        timezone=None,
+        public_ip=None,
+        latitude=None,
+        longitude=None,
+        source="ipwho.is -> ipapi.co",
+        error=last_error,
+    )
+
+
+def detect_local_ip_address() -> str | None:
+    """Detect the current host's primary local IP address."""
+
+    for address in (
+        _detect_local_ip_via_udp_probe(),
+        _detect_local_ip_via_hostname(),
+    ):
+        if address and not address.startswith("127."):
+            return address
+    return None
+
+
+def _fetch_location_payload(url: str, timeout_sec: float) -> dict[str, Any]:
     request = urllib_request.Request(
         url,
         headers={
@@ -152,7 +196,6 @@ def detect_host_location(timeout_sec: float = 1.5) -> HostLocationInfo:
         },
     )
     ssl_context = _build_ssl_context()
-
     try:
         with urllib_request.urlopen(
             request,
@@ -167,19 +210,13 @@ def detect_host_location(timeout_sec: float = 1.5) -> HostLocationInfo:
         UnicodeDecodeError,
         urllib_error.URLError,
     ) as exc:
-        return HostLocationInfo(
-            available=False,
-            city=None,
-            region=None,
-            country=None,
-            timezone=None,
-            public_ip=None,
-            latitude=None,
-            longitude=None,
-            source="ipwho.is",
-            error=str(exc),
-        )
+        raise VPNManagerError(str(exc)) from exc
+    if not isinstance(payload, dict):
+        raise VPNManagerError("Location service returned an invalid payload.")
+    return payload
 
+
+def _parse_ipwhois_payload(payload: dict[str, Any]) -> HostLocationInfo:
     success = bool(payload.get("success", True))
     if not success:
         return HostLocationInfo(
@@ -216,16 +253,33 @@ def detect_host_location(timeout_sec: float = 1.5) -> HostLocationInfo:
     )
 
 
-def detect_local_ip_address() -> str | None:
-    """Detect the current host's primary local IP address."""
+def _parse_ipapi_payload(payload: dict[str, Any]) -> HostLocationInfo:
+    if payload.get("error"):
+        return HostLocationInfo(
+            available=False,
+            city=None,
+            region=None,
+            country=None,
+            timezone=None,
+            public_ip=None,
+            latitude=None,
+            longitude=None,
+            source="ipapi.co",
+            error=str(payload.get("reason") or "Lookup failed."),
+        )
 
-    for address in (
-        _detect_local_ip_via_udp_probe(),
-        _detect_local_ip_via_hostname(),
-    ):
-        if address and not address.startswith("127."):
-            return address
-    return None
+    return HostLocationInfo(
+        available=True,
+        city=_clean_optional_text(payload.get("city")),
+        region=_clean_optional_text(payload.get("region")),
+        country=_clean_optional_text(payload.get("country_name")),
+        timezone=_clean_optional_text(payload.get("timezone")),
+        public_ip=_clean_optional_text(payload.get("ip")),
+        latitude=_parse_optional_float(payload.get("latitude")),
+        longitude=_parse_optional_float(payload.get("longitude")),
+        source="ipapi.co",
+        error=None,
+    )
 
 
 def detect_host_hardware() -> HostHardwareInfo:

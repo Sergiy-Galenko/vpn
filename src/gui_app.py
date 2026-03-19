@@ -316,6 +316,9 @@ class VPNDesktopApp(tk.Tk):
 
         for label, command, control_required in [
             ("Refresh Dashboard", self._refresh_all, False),
+            ("System Info", self._open_system_info_dialog, False),
+            ("Refresh Location", self._refresh_location_info, False),
+            ("Set Server IP", self._open_endpoint_quick_dialog, False),
             ("Connect to Server", self._open_remote_profile_dialog, False),
             ("Validate Environment", self._show_validation_results, False),
             ("Run Setup Wizard", self._open_first_run_wizard, False),
@@ -392,6 +395,8 @@ class VPNDesktopApp(tk.Tk):
         actions = tk.Frame(hero, bg=PALETTE["paper"])
         actions.grid(row=0, column=1, rowspan=3, sticky="ne")
         for label, command in [
+            ("System Info", self._open_system_info_dialog),
+            ("Set Server IP", self._open_endpoint_quick_dialog),
             ("Connect to Server", self._open_remote_profile_dialog),
             ("Validate", self._show_validation_results),
             ("Backup", self._prompt_create_backup),
@@ -542,6 +547,17 @@ class VPNDesktopApp(tk.Tk):
             font=("Avenir Next", 11),
         ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(8, 14))
 
+        self.location_detail_var = tk.StringVar()
+        tk.Label(
+            hardware_card,
+            textvariable=self.location_detail_var,
+            bg=PALETTE["paper"],
+            fg=PALETTE["muted"],
+            justify="left",
+            wraplength=1200,
+            font=("Avenir Next", 10),
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(0, 14))
+
         self.hardware_value_labels: dict[str, tk.Label] = {}
         for index, (key, title) in enumerate(
             [
@@ -553,9 +569,13 @@ class VPNDesktopApp(tk.Tk):
                 ("gpu_cores", "GPU Cores"),
                 ("local_ip", "Local IP"),
                 ("public_ip", "Public IP"),
+                ("coordinates", "Coordinates"),
+                ("timezone", "Timezone"),
+                ("location_source", "Location Source"),
+                ("vpn_endpoint", "VPN Endpoint"),
             ]
         ):
-            row = 2 + (index // 4) * 2
+            row = 3 + (index // 4) * 2
             column = index % 4
             cell = tk.Frame(hardware_card, bg="#FBFAF7", padx=14, pady=12)
             cell.grid(row=row, column=column, sticky="nsew", padx=(0 if column == 0 else 10, 0), pady=(0, 10))
@@ -1867,6 +1887,127 @@ class VPNDesktopApp(tk.Tk):
         self.update_idletasks()
         self.status_var.set("Copied config to clipboard.")
 
+    def _refresh_location_info(self) -> None:
+        detect_host_location.cache_clear()
+        self.host_location = detect_host_location()
+        self._refresh_all()
+        self.status_var.set("Location data refreshed.")
+
+    def _open_system_info_dialog(self) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("System Info")
+        dialog.configure(bg=PALETTE["paper"])
+        dialog.transient(self)
+        dialog.geometry("860x640")
+
+        tk.Label(
+            dialog,
+            text="System Info",
+            bg=PALETTE["paper"],
+            fg=PALETTE["ink"],
+            font=("Iowan Old Style", 24, "bold"),
+        ).pack(anchor="w", padx=24, pady=(24, 8))
+        tk.Label(
+            dialog,
+            text="Best-effort host diagnostics. Location is determined from public IP geolocation and is approximate unless the provider can resolve it more precisely.",
+            bg=PALETTE["paper"],
+            fg=PALETTE["muted"],
+            justify="left",
+            wraplength=780,
+            font=("Avenir Next", 11),
+        ).pack(anchor="w", padx=24, pady=(0, 12))
+
+        text_box = ScrolledText(
+            dialog,
+            wrap="word",
+            bg="#FBFAF7",
+            fg=PALETTE["text"],
+            insertbackground=PALETTE["ink"],
+            relief="flat",
+            font=("Menlo", 11),
+        )
+        text_box.pack(fill="both", expand=True, padx=24, pady=(0, 24))
+        text_box.insert(
+            "1.0",
+            "\n".join(
+                [
+                    f"Host OS          : {self.host_platform.display_name}",
+                    f"System           : {self.host_platform.system}",
+                    f"Release          : {self.host_platform.release}",
+                    f"Version          : {self.host_platform.version}",
+                    f"Architecture     : {self.host_platform.machine}",
+                    f"Processor        : {self.host_hardware.cpu_name}",
+                    f"RAM              : {format_bytes_binary(self.host_hardware.memory_total_bytes)}",
+                    f"Storage          : {format_bytes_binary(self.host_hardware.storage_total_bytes)}",
+                    f"CPU cores        : {self._cpu_summary()}",
+                    f"GPU cores        : {self._gpu_summary()}",
+                    f"Local IP         : {self.local_ip_address or 'Unavailable'}",
+                    f"Public IP        : {self.host_location.public_ip or 'Unavailable'}",
+                    f"Location         : {self.host_location.summary}",
+                    f"Latitude         : {self.host_location.latitude_summary}",
+                    f"Longitude        : {self.host_location.longitude_summary}",
+                    f"Coordinates      : {self.host_location.coordinates_summary}",
+                    f"Timezone         : {self.host_location.timezone or 'Unavailable'}",
+                    f"Source           : {self.host_location.source}",
+                    f"Lookup status    : {'available' if self.host_location.available else 'unavailable'}",
+                    f"Lookup error     : {self.host_location.error or 'None'}",
+                    f"VPN endpoint     : {self.manager.config.endpoint}",
+                    f"Control target   : {self.manager.control_target_summary()}",
+                ]
+            ),
+        )
+        text_box.configure(state="disabled")
+
+        button_row = tk.Frame(dialog, bg=PALETTE["paper"])
+        button_row.pack(anchor="e", padx=24, pady=(0, 18))
+        ttk.Button(
+            button_row,
+            text="Refresh Location",
+            command=lambda: (dialog.destroy(), self._refresh_location_info(), self._open_system_info_dialog()),
+            style="Accent.TButton",
+        ).pack(side="left", padx=(0, 10))
+        ttk.Button(
+            button_row,
+            text="Set Server IP",
+            command=lambda: (dialog.destroy(), self._open_endpoint_quick_dialog()),
+            style="Accent.TButton",
+        ).pack(side="left")
+
+    def _open_endpoint_quick_dialog(self) -> None:
+        current = editable_settings_from_config(self.manager.config)
+        value = simpledialog.askstring(
+            "Set VPN Endpoint / Server IP",
+            "Enter the server public IP or DNS name for WG_ENDPOINT.\n\nThis changes the VPN server endpoint used in generated client configs. It does not change or spoof your local device IP.",
+            initialvalue=current.endpoint,
+            parent=self,
+        )
+        if value is None:
+            return
+
+        endpoint = value.strip()
+        if not endpoint:
+            messagebox.showerror("Set VPN Endpoint", "Server IP / endpoint cannot be empty.", parent=self)
+            return
+
+        try:
+            updated = EditableVPNSettings(
+                endpoint=endpoint,
+                interface_name=current.interface_name,
+                server_address=current.server_address,
+                server_port=current.server_port,
+                public_interface=current.public_interface,
+                dns=current.dns,
+                client_allowed_ips=current.client_allowed_ips,
+                connected_window_seconds=current.connected_window_seconds,
+            )
+            new_config = save_editable_settings(self.manager.config.project_root, updated)
+            self.manager.update_config(new_config)
+            self._load_settings_form()
+            self._refresh_all()
+            self.status_var.set(f"VPN endpoint updated to {endpoint}")
+        except VPNManagerError as exc:
+            messagebox.showerror("Set VPN Endpoint", str(exc), parent=self)
+
     def _show_validation_results(self) -> None:
         self._run_task(
             "Validating environment",
@@ -2333,6 +2474,15 @@ class VPNDesktopApp(tk.Tk):
         )
 
     def _update_hardware_card(self) -> None:
+        self.location_detail_var.set(
+            "Location is determined by public IP geolocation. "
+            f"Provider: {self.host_location.source}. "
+            + (
+                f"Approximate place: {self.host_location.summary}."
+                if self.host_location.available
+                else f"Lookup unavailable: {self.host_location.error or 'unknown error'}."
+            )
+        )
         self.hardware_value_labels["host_os"].configure(
             text=f"{self.host_platform.display_name} {self.host_platform.release} | {self.host_platform.machine}"
         )
@@ -2350,6 +2500,18 @@ class VPNDesktopApp(tk.Tk):
         )
         self.hardware_value_labels["public_ip"].configure(
             text=self.host_location.public_ip or "Unavailable"
+        )
+        self.hardware_value_labels["coordinates"].configure(
+            text=self.host_location.coordinates_summary
+        )
+        self.hardware_value_labels["timezone"].configure(
+            text=self.host_location.timezone or "Unavailable"
+        )
+        self.hardware_value_labels["location_source"].configure(
+            text=self.host_location.source
+        )
+        self.hardware_value_labels["vpn_endpoint"].configure(
+            text=self.manager.config.endpoint
         )
 
     def _update_sidebar(self, service_text: str) -> None:
