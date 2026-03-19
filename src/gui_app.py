@@ -12,7 +12,14 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import Callable
 
-from src.config import EditableVPNSettings, editable_settings_from_config, save_editable_settings
+from src.config import (
+    EditableVPNSettings,
+    editable_settings_from_config,
+    load_app_language,
+    save_app_language,
+    save_editable_settings,
+)
+from src.i18n import LANGUAGE_LABELS, normalize_language, translate
 from src.models import (
     AuditLogRecord,
     AuthMethod,
@@ -128,9 +135,10 @@ def open_path_in_system(path: Path) -> None:
 class VPNDesktopApp(tk.Tk):
     """Desktop UI wrapper around the WireGuard manager."""
 
-    def __init__(self, manager: WireGuardManager) -> None:
+    def __init__(self, manager: WireGuardManager, *, language: str = "uk") -> None:
         super().__init__()
         self.manager = manager
+        self.language = normalize_language(language)
         self.host_platform: HostPlatformInfo = detect_host_platform()
         self.host_location: HostLocationInfo = detect_host_location()
         self.host_hardware: HostHardwareInfo = detect_host_hardware()
@@ -145,7 +153,7 @@ class VPNDesktopApp(tk.Tk):
         self.audit_rows: dict[str, AuditLogRecord] = {}
         self.qr_image_refs: list[tk.PhotoImage] = []
 
-        self.title("WireGuard Control Room")
+        self.title(self._t("WireGuard Control Room", "Панель керування WireGuard"))
         self.geometry("1520x980")
         self.minsize(1240, 780)
         self.configure(bg=PALETTE["sand"])
@@ -159,6 +167,7 @@ class VPNDesktopApp(tk.Tk):
         self.connected_note_var = tk.StringVar()
         self.remote_summary_var = tk.StringVar()
         self.imported_summary_var = tk.StringVar()
+        self.language_var = tk.StringVar(value=self.language)
 
         self.settings_vars = {
             "endpoint": tk.StringVar(),
@@ -185,6 +194,9 @@ class VPNDesktopApp(tk.Tk):
         self._refresh_control_capabilities()
         self.after(160, self._poll_task_queue)
         self.after(240, self._maybe_open_first_run_wizard)
+
+    def _t(self, en: str, uk: str) -> str:
+        return translate(self.language, en=en, uk=uk)
 
     def _build_styles(self) -> None:
         style = ttk.Style(self)
@@ -299,14 +311,17 @@ class VPNDesktopApp(tk.Tk):
 
         tk.Label(
             parent,
-            text="Control Room",
+            text=self._t("Control Room", "Панель керування"),
             bg=PALETTE["ink"],
             fg=PALETTE["paper"],
             font=("Iowan Old Style", 24, "bold"),
         ).pack(anchor="w", padx=28)
         tk.Label(
             parent,
-            text="Desktop console for your personal WireGuard VPN",
+            text=self._t(
+                "Desktop console for your personal WireGuard VPN",
+                "Десктопна консоль для вашого персонального WireGuard VPN",
+            ),
             bg=PALETTE["ink"],
             fg="#B6C2CF",
             wraplength=220,
@@ -315,21 +330,21 @@ class VPNDesktopApp(tk.Tk):
         ).pack(anchor="w", padx=28, pady=(6, 20))
 
         for label, command, control_required in [
-            ("Refresh Dashboard", self._refresh_all, False),
-            ("System Info", self._open_system_info_dialog, False),
-            ("Refresh Location", self._refresh_location_info, False),
-            ("Set Server IP", self._open_endpoint_quick_dialog, False),
-            ("Connect to Server", self._open_remote_profile_dialog, False),
-            ("Validate Environment", self._show_validation_results, False),
-            ("Run Setup Wizard", self._open_first_run_wizard, False),
-            ("Create Backup", self._prompt_create_backup, False),
-            ("Import Existing Config", self._prompt_import_existing_config, False),
-            ("Install VPN", lambda: self._run_task("Installing VPN", self.manager.install_wireguard), True),
-            ("Start VPN", lambda: self._run_task("Starting VPN", self.manager.start_vpn), True),
-            ("Stop VPN", lambda: self._run_task("Stopping VPN", self.manager.stop_vpn), True),
-            ("Restart VPN", lambda: self._run_task("Restarting VPN", self.manager.restart_vpn), True),
-            ("Open Configs Folder", lambda: self._open_path(self.manager.config.configs_dir), False),
-            ("Open Data Folder", lambda: self._open_path(self.manager.config.data_dir), False),
+            (self._t("Refresh Dashboard", "Оновити дашборд"), self._refresh_all, False),
+            (self._t("System Info", "Системна інформація"), self._open_system_info_dialog, False),
+            (self._t("Refresh Location", "Оновити локацію"), self._refresh_location_info, False),
+            (self._t("Set Server IP", "Встановити IP сервера"), self._open_endpoint_quick_dialog, False),
+            (self._t("Connect to Server", "Підключитися до сервера"), self._open_remote_profile_dialog, False),
+            (self._t("Validate Environment", "Перевірити середовище"), self._show_validation_results, False),
+            (self._t("Run Setup Wizard", "Запустити майстер"), self._open_first_run_wizard, False),
+            (self._t("Create Backup", "Створити backup"), self._prompt_create_backup, False),
+            (self._t("Import Existing Config", "Імпортувати config"), self._prompt_import_existing_config, False),
+            (self._t("Install VPN", "Встановити VPN"), lambda: self._run_task("Installing VPN", self.manager.install_wireguard), True),
+            (self._t("Start VPN", "Запустити VPN"), lambda: self._run_task("Starting VPN", self.manager.start_vpn), True),
+            (self._t("Stop VPN", "Зупинити VPN"), lambda: self._run_task("Stopping VPN", self.manager.stop_vpn), True),
+            (self._t("Restart VPN", "Перезапустити VPN"), lambda: self._run_task("Restarting VPN", self.manager.restart_vpn), True),
+            (self._t("Open Configs Folder", "Відкрити configs"), lambda: self._open_path(self.manager.config.configs_dir), False),
+            (self._t("Open Data Folder", "Відкрити data"), lambda: self._open_path(self.manager.config.data_dir), False),
         ]:
             button = ttk.Button(parent, text=label, command=command, style="Sidebar.TButton")
             button.pack(fill="x", padx=24, pady=5)
@@ -360,14 +375,17 @@ class VPNDesktopApp(tk.Tk):
 
         tk.Label(
             hero,
-            text="WireGuard Operations Deck",
+            text=self._t("WireGuard Operations Deck", "Панель операцій WireGuard"),
             bg=PALETTE["paper"],
             fg=PALETTE["ink"],
             font=("Iowan Old Style", 30, "bold"),
         ).grid(row=0, column=0, sticky="w")
         tk.Label(
             hero,
-            text="Desktop control panel for local Ubuntu or remote SSH-backed WireGuard management.",
+            text=self._t(
+                "Desktop control panel for local Ubuntu or remote SSH-backed WireGuard management.",
+                "Десктопна панель для локального Ubuntu або remote SSH-керування WireGuard.",
+            ),
             bg=PALETTE["paper"],
             fg=PALETTE["muted"],
             font=("Avenir Next", 12),
@@ -395,11 +413,11 @@ class VPNDesktopApp(tk.Tk):
         actions = tk.Frame(hero, bg=PALETTE["paper"])
         actions.grid(row=0, column=1, rowspan=3, sticky="ne")
         for label, command in [
-            ("System Info", self._open_system_info_dialog),
-            ("Set Server IP", self._open_endpoint_quick_dialog),
-            ("Connect to Server", self._open_remote_profile_dialog),
-            ("Validate", self._show_validation_results),
-            ("Backup", self._prompt_create_backup),
+            (self._t("System Info", "Системна інформація"), self._open_system_info_dialog),
+            (self._t("Set Server IP", "Встановити IP сервера"), self._open_endpoint_quick_dialog),
+            (self._t("Connect to Server", "Підключитися до сервера"), self._open_remote_profile_dialog),
+            (self._t("Validate", "Перевірити"), self._show_validation_results),
+            (self._t("Backup", "Backup"), self._prompt_create_backup),
         ]:
             button = ttk.Button(actions, text=label, command=command, style="Accent.TButton")
             button.pack(anchor="e", pady=4)
@@ -416,12 +434,12 @@ class VPNDesktopApp(tk.Tk):
         self.audit_tab = tk.Frame(notebook, bg=PALETTE["sand"])
         self.settings_tab = tk.Frame(notebook, bg=PALETTE["sand"])
 
-        notebook.add(self.overview_tab, text="Overview")
-        notebook.add(self.clients_tab, text="Clients")
-        notebook.add(self.connected_tab, text="Connected")
-        notebook.add(self.maintenance_tab, text="Maintenance")
-        notebook.add(self.audit_tab, text="Audit Log")
-        notebook.add(self.settings_tab, text="Settings")
+        notebook.add(self.overview_tab, text=self._t("Overview", "Огляд"))
+        notebook.add(self.clients_tab, text=self._t("Clients", "Клієнти"))
+        notebook.add(self.connected_tab, text=self._t("Connected", "Підключення"))
+        notebook.add(self.maintenance_tab, text=self._t("Maintenance", "Обслуговування"))
+        notebook.add(self.audit_tab, text=self._t("Audit Log", "Аудит-лог"))
+        notebook.add(self.settings_tab, text=self._t("Settings", "Налаштування"))
 
         self._build_overview_tab()
         self._build_clients_tab()
@@ -1040,14 +1058,17 @@ class VPNDesktopApp(tk.Tk):
 
         tk.Label(
             vpn_card,
-            text="VPN Settings",
+            text=self._t("VPN Settings", "Налаштування VPN"),
             bg=PALETTE["paper"],
             fg=PALETTE["ink"],
             font=("Iowan Old Style", 22, "bold"),
         ).grid(row=0, column=0, columnspan=2, sticky="w")
         tk.Label(
             vpn_card,
-            text="Customize endpoint, interface, subnet, DNS and related parameters. Values are saved into .env.",
+            text=self._t(
+                "Customize endpoint, interface, subnet, DNS and related parameters. Values are saved into .env.",
+                "Налаштовуйте endpoint, інтерфейс, підмережу, DNS та інші параметри. Значення зберігаються в .env.",
+            ),
             bg=PALETTE["paper"],
             fg=PALETTE["muted"],
             justify="left",
@@ -1056,14 +1077,14 @@ class VPNDesktopApp(tk.Tk):
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 18))
 
         row_specs = [
-            ("Endpoint", "endpoint"),
-            ("Interface name", "interface_name"),
-            ("Server address", "server_address"),
-            ("Server port", "server_port"),
-            ("Public interface", "public_interface"),
+            (self._t("Endpoint", "Endpoint"), "endpoint"),
+            (self._t("Interface name", "Назва інтерфейсу"), "interface_name"),
+            (self._t("Server address", "Адреса сервера"), "server_address"),
+            (self._t("Server port", "Порт сервера"), "server_port"),
+            (self._t("Public interface", "Публічний інтерфейс"), "public_interface"),
             ("DNS", "dns"),
-            ("Client allowed IPs", "client_allowed_ips"),
-            ("Connected window", "connected_window_seconds"),
+            (self._t("Client allowed IPs", "Client allowed IPs"), "client_allowed_ips"),
+            (self._t("Connected window", "Вікно підключення"), "connected_window_seconds"),
         ]
         for row_index, (label, key) in enumerate(row_specs, start=2):
             tk.Label(
@@ -1078,12 +1099,31 @@ class VPNDesktopApp(tk.Tk):
             entry.grid(row=row_index, column=1, sticky="ew", pady=7)
             self.busy_widgets.append(entry)
 
+        tk.Label(
+            vpn_card,
+            text=self._t("Application language", "Мова застосунку"),
+            bg=PALETTE["paper"],
+            fg=PALETTE["ink"],
+            anchor="w",
+            font=("Avenir Next", 10, "bold"),
+        ).grid(row=10, column=0, sticky="w", pady=7, padx=(0, 14))
+        language_box = ttk.Combobox(
+            vpn_card,
+            textvariable=self.language_var,
+            values=("uk", "en"),
+            state="readonly",
+            width=10,
+        )
+        language_box.grid(row=10, column=1, sticky="w", pady=7)
+        self.busy_widgets.append(language_box)
+
         vpn_buttons = tk.Frame(vpn_card, bg=PALETTE["paper"])
-        vpn_buttons.grid(row=10, column=0, columnspan=2, sticky="w", pady=(18, 0))
+        vpn_buttons.grid(row=11, column=0, columnspan=2, sticky="w", pady=(18, 0))
         for label, command in [
-            ("Save Settings", self._save_settings),
-            ("Reload Settings", self._load_settings_form),
-            ("Open .env", lambda: self._open_path(self.manager.config.project_root / ".env")),
+            (self._t("Save Settings", "Зберегти налаштування"), self._save_settings),
+            (self._t("Reload Settings", "Перезавантажити налаштування"), self._load_settings_form),
+            (self._t("Apply Language", "Застосувати мову"), self._apply_language_selection),
+            (self._t("Open .env", "Відкрити .env"), lambda: self._open_path(self.manager.config.project_root / ".env")),
         ]:
             button = ttk.Button(vpn_buttons, text=label, command=command, style="Accent.TButton")
             button.pack(side="left", padx=(0, 10))
@@ -1094,7 +1134,7 @@ class VPNDesktopApp(tk.Tk):
 
         tk.Label(
             remote_card,
-            text="Remote SSH Profile",
+            text=self._t("Remote SSH Profile", "Remote SSH профіль"),
             bg=PALETTE["paper"],
             fg=PALETTE["ink"],
             font=("Iowan Old Style", 22, "bold"),
@@ -1112,9 +1152,9 @@ class VPNDesktopApp(tk.Tk):
         remote_buttons = tk.Frame(remote_card, bg=PALETTE["paper"])
         remote_buttons.pack(anchor="w")
         for label, command, style in [
-            ("Connect to Server", self._open_remote_profile_dialog, "Accent.TButton"),
-            ("Test Connection", self._test_remote_profile, "Accent.TButton"),
-            ("Clear Remote Profile", self._clear_remote_profile, "Danger.TButton"),
+            (self._t("Connect to Server", "Підключитися до сервера"), self._open_remote_profile_dialog, "Accent.TButton"),
+            (self._t("Test Connection", "Перевірити зʼєднання"), self._test_remote_profile, "Accent.TButton"),
+            (self._t("Clear Remote Profile", "Очистити remote-профіль"), self._clear_remote_profile, "Danger.TButton"),
         ]:
             button = ttk.Button(remote_buttons, text=label, command=command, style=style)
             button.pack(side="left", padx=(0, 10))
@@ -2242,6 +2282,7 @@ class VPNDesktopApp(tk.Tk):
         self.settings_vars["dns"].set(settings.dns)
         self.settings_vars["client_allowed_ips"].set(settings.client_allowed_ips)
         self.settings_vars["connected_window_seconds"].set(str(settings.connected_window_seconds))
+        self.language_var.set(self.language)
 
     def _save_settings(self) -> None:
         try:
@@ -2273,6 +2314,41 @@ class VPNDesktopApp(tk.Tk):
             )
         except VPNManagerError as exc:
             messagebox.showerror("Invalid settings", str(exc), parent=self)
+
+    def _apply_language_selection(self) -> None:
+        new_language = save_app_language(
+            self.manager.config.project_root,
+            self.language_var.get(),
+        )
+        if new_language == self.language:
+            self.status_var.set(
+                self._t("Language is already active.", "Ця мова вже активна.")
+            )
+            return
+        self.language = new_language
+        self._rebuild_interface()
+        self.status_var.set(
+            self._t(
+                f"Language changed to {LANGUAGE_LABELS[self.language]}.",
+                f"Мову змінено на {LANGUAGE_LABELS[self.language]}.",
+            )
+        )
+
+    def _rebuild_interface(self) -> None:
+        self.busy_widgets.clear()
+        self.control_widgets.clear()
+        self.client_rows.clear()
+        self.backup_rows.clear()
+        self.audit_rows.clear()
+        self.qr_image_refs.clear()
+        for child in self.winfo_children():
+            child.destroy()
+        self.title(self._t("WireGuard Control Room", "Панель керування WireGuard"))
+        self._build_styles()
+        self._build_shell()
+        self._load_settings_form()
+        self._refresh_all()
+        self._refresh_control_capabilities()
 
     def _refresh_all(self) -> None:
         self.host_platform = detect_host_platform()
@@ -2599,8 +2675,9 @@ class VPNDesktopApp(tk.Tk):
         return str(self.host_hardware.gpu_cores)
 
 
-def run_gui_app(manager: WireGuardManager) -> None:
+def run_gui_app(manager: WireGuardManager, *, language: str | None = None) -> None:
     """Start the desktop GUI event loop."""
 
-    app = VPNDesktopApp(manager)
+    resolved_language = language or load_app_language(manager.config.project_root)
+    app = VPNDesktopApp(manager, language=resolved_language)
     app.mainloop()

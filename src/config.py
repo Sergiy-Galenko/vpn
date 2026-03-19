@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from src.i18n import DEFAULT_LANGUAGE, normalize_language
 from src.models import VPNManagerError
 
 MANAGED_ENV_KEYS = (
@@ -234,11 +235,26 @@ def _write_env_file(env_path: Path, values: dict[str, str]) -> None:
         else:
             updated_lines.append(line)
 
-    for key in MANAGED_ENV_KEYS:
+    for key in values:
         if key not in seen_keys:
             updated_lines.append(f"{key}={values[key]}")
 
     env_path.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+
+
+def load_app_language(project_root: Path) -> str:
+    """Load the persisted application language from .env."""
+
+    load_dotenv(project_root / ".env", override=True)
+    return normalize_language(os.getenv("APP_LANGUAGE", DEFAULT_LANGUAGE))
+
+
+def save_app_language(project_root: Path, language: str) -> str:
+    """Persist the application language into .env and return the normalized value."""
+
+    normalized = normalize_language(language)
+    _write_env_file(project_root / ".env", {"APP_LANGUAGE": normalized})
+    return normalized
 
 
 def load_config(base_dir: Path | None = None) -> AppConfig:

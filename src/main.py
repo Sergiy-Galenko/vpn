@@ -13,8 +13,14 @@ if __package__ in {None, ""}:
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import load_config
-from src.config import editable_settings_from_config, save_editable_settings
+from src.config import (
+    editable_settings_from_config,
+    load_app_language,
+    load_config,
+    save_app_language,
+    save_editable_settings,
+)
+from src.i18n import LANGUAGE_LABELS, translate
 from src.models import ConnectedClient, VPNManagerError
 from src.storage import ClientStorage
 from src.utils import (
@@ -24,6 +30,13 @@ from src.utils import (
     setup_logging,
 )
 from src.wireguard_manager import WireGuardManager
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _t(language: str, en: str, uk: str) -> str:
+    return translate(language, en=en, uk=uk)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,6 +102,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("show-remote", help="Show the saved remote SSH profile.")
     subparsers.add_parser("clear-remote", help="Delete the saved remote SSH profile.")
     subparsers.add_parser("wizard", help="Run the first-run setup wizard in the terminal.")
+    set_language_parser = subparsers.add_parser(
+        "set-language",
+        help="Persist the UI language for GUI and console.",
+    )
+    set_language_parser.add_argument(
+        "--language",
+        required=True,
+        choices=["uk", "en"],
+        help="Application language.",
+    )
 
     configure_parser = subparsers.add_parser(
         "configure-vpn",
@@ -469,13 +492,13 @@ def run_interactive_menu(manager: WireGuardManager) -> int:
             print(f"Error: {exc}")
 
 
-def run_gui_command(manager: WireGuardManager) -> int:
+def run_gui_command(manager: WireGuardManager, language: str | None = None) -> int:
     """Start the Tk desktop GUI."""
 
     from src.gui_app import run_gui_app
 
     try:
-        run_gui_app(manager)
+        run_gui_app(manager, language=language or load_app_language(manager.config.project_root))
     except tk.TclError as exc:
         raise VPNManagerError(
             "The desktop UI could not be started. "
@@ -485,24 +508,42 @@ def run_gui_command(manager: WireGuardManager) -> int:
     return 0
 
 
-def choose_launch_mode() -> str:
+def choose_launch_mode(language: str | None = None) -> str:
     """Prompt the user to choose GUI or console when no command was provided."""
 
     host = detect_host_platform()
+    current_language = language or load_app_language(PROJECT_ROOT)
     print()
-    print("WireGuard Manager")
-    print(f"Host: {host.summary}")
-    print("Choose interface:")
-    print("1. Graphical interface")
-    print("2. Console interface")
+    print(_t(current_language, "WireGuard Manager", "Менеджер WireGuard"))
+    print(f"{_t(current_language, 'Host', 'Хост')}: {host.summary}")
+    print(_t(current_language, "Choose interface:", "Оберіть інтерфейс:"))
+    print(f"1. {_t(current_language, 'Graphical interface', 'Графічний інтерфейс')}")
+    print(f"2. {_t(current_language, 'Console interface', 'Консольний інтерфейс')}")
+    print(
+        f"3. {_t(current_language, 'Change language', 'Змінити мову')}"
+        f" ({' / '.join(f'{code.upper()}={label}' for code, label in LANGUAGE_LABELS.items())})"
+    )
 
     while True:
-        choice = input("Enter 1 or 2: ").strip()
+        choice = input(_t(current_language, "Enter 1, 2, or 3: ", "Введіть 1, 2 або 3: ")).strip()
         if choice == "1":
             return "gui"
         if choice == "2":
             return "console"
-        print("Invalid choice. Enter 1 or 2.")
+        if choice == "3":
+            selected = input(_t(current_language, "Choose language [uk/en]: ", "Оберіть мову [uk/en]: ")).strip().lower()
+            current_language = save_app_language(PROJECT_ROOT, selected)
+            print(_t(current_language, "Language saved.", "Мову збережено."))
+            print()
+            print(_t(current_language, "Choose interface:", "Оберіть інтерфейс:"))
+            print(f"1. {_t(current_language, 'Graphical interface', 'Графічний інтерфейс')}")
+            print(f"2. {_t(current_language, 'Console interface', 'Консольний інтерфейс')}")
+            print(
+                f"3. {_t(current_language, 'Change language', 'Змінити мову')}"
+                f" ({' / '.join(f'{code.upper()}={label}' for code, label in LANGUAGE_LABELS.items())})"
+            )
+            continue
+        print(_t(current_language, "Invalid choice. Enter 1, 2, or 3.", "Неправильний вибір. Введіть 1, 2 або 3."))
 
 
 def should_prompt_for_launch_mode() -> bool:
@@ -515,11 +556,19 @@ def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
     """Execute a subcommand or open the interactive menu by default."""
 
     command = args.command or "gui"
+    language = load_app_language(manager.config.project_root)
 
     if command in {"menu", "console"}:
         from src.console_app import run_console_app
 
-        return run_console_app(manager, open_gui_callback=lambda: run_gui_command(manager))
+        return run_console_app(
+            manager,
+            open_gui_callback=lambda: run_gui_command(
+                manager,
+                language=load_app_language(manager.config.project_root),
+            ),
+            language=language,
+        )
     if command == "install-vpn":
         manager.install_wireguard()
         print("WireGuard installation and configuration completed.")
@@ -605,6 +654,10 @@ def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
         run_first_run_wizard(manager)
         print("Wizard completed.")
         return 0
+    if command == "set-language":
+        normalized = save_app_language(manager.config.project_root, args.language)
+        print(f"Language saved: {normalized}")
+        return 0
     if command == "start-vpn":
         manager.start_vpn()
         print("VPN started.")
@@ -618,7 +671,7 @@ def execute_command(args: argparse.Namespace, manager: WireGuardManager) -> int:
         print("VPN restarted.")
         return 0
     if command in {"gui", "app"}:
-        return run_gui_command(manager)
+        return run_gui_command(manager, language=language)
 
     raise VPNManagerError(f"Unknown command: {command}")
 
@@ -631,8 +684,9 @@ def main() -> int:
 
     try:
         host = detect_host_platform()
+        app_language = load_app_language(PROJECT_ROOT)
         if args.command is None and should_prompt_for_launch_mode():
-            args.command = choose_launch_mode()
+            args.command = choose_launch_mode(app_language)
         manager = create_manager(verbose=args.verbose)
         logging.getLogger("main").info("Detected host platform: %s", host.summary)
         return execute_command(args, manager)

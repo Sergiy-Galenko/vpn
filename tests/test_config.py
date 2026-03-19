@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.config import EditableVPNSettings, load_config, save_editable_settings
+from src.config import (
+    EditableVPNSettings,
+    load_app_language,
+    load_config,
+    save_app_language,
+    save_editable_settings,
+)
 
 
 class ConfigEditingTests(unittest.TestCase):
@@ -62,6 +68,23 @@ class ConfigEditingTests(unittest.TestCase):
             self.assertEqual(config.server_port, 51234)
             self.assertEqual(config.public_interface, "en0")
             self.assertEqual(config.connected_window_seconds, 222)
+
+    def test_save_and_load_app_language_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+
+            saved_language = save_app_language(project_root, "en")
+            loaded_language = load_app_language(project_root)
+
+            self.assertEqual(saved_language, "en")
+            self.assertEqual(loaded_language, "en")
+
+    def test_load_app_language_normalizes_ukrainian_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            (project_root / ".env").write_text("APP_LANGUAGE=ua\n", encoding="utf-8")
+
+            self.assertEqual(load_app_language(project_root), "uk")
 
 
 if __name__ == "__main__":

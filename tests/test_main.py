@@ -59,7 +59,9 @@ class MainEntryPointTests(unittest.TestCase):
             result = execute_command(args, self.manager)
 
         self.assertEqual(result, 0)
-        run_gui_app.assert_called_once_with(self.manager)
+        run_gui_app.assert_called_once()
+        self.assertEqual(run_gui_app.call_args.args[0], self.manager)
+        self.assertIn("language", run_gui_app.call_args.kwargs)
 
     def test_execute_command_wraps_tk_error_for_gui(self) -> None:
         args = argparse.Namespace(command="gui")

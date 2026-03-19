@@ -7,7 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from src.config import EditableVPNSettings, editable_settings_from_config, save_editable_settings
+from src.config import (
+    EditableVPNSettings,
+    editable_settings_from_config,
+    save_app_language,
+    save_editable_settings,
+)
+from src.i18n import LANGUAGE_LABELS, normalize_language, translate
 from src.models import AuthMethod, ConnectedClient, VPNManagerError
 from src.utils import (
     detect_host_hardware,
@@ -59,23 +65,30 @@ class ConsoleApp:
         manager: WireGuardManager,
         *,
         open_gui_callback: Callable[[], int] | None = None,
+        language: str = "uk",
     ) -> None:
         self.manager = manager
         self.open_gui_callback = open_gui_callback
+        self.language = normalize_language(language)
         self.host = detect_host_platform()
         self.hardware = detect_host_hardware()
         self.location = detect_host_location()
         self.local_ip_address = detect_local_ip_address()
         self.use_ansi = _supports_ansi()
 
+    def _t(self, en: str, uk: str) -> str:
+        return translate(self.language, en=en, uk=uk)
+
     def run(self) -> int:
         while True:
             self._clear()
             self._render_home()
-            choice = input("\nSelect action: ").strip().lower()
+            choice = input(
+                self._t("\nSelect action: ", "\nОберіть дію: ")
+            ).strip().lower()
 
             if choice in {"0", "q", "quit", "exit"}:
-                self._print_message("Console session closed.", tone="teal")
+                self._print_message(self._t("Console session closed.", "Консольну сесію завершено."), tone="teal")
                 return 0
             if choice == "1":
                 self._show_dashboard()
@@ -129,12 +142,14 @@ class ConsoleApp:
                 self._open_gui()
             elif choice == "26":
                 self._run_setup_wizard()
+            elif choice == "27":
+                self._change_language()
             else:
-                self._pause("Unknown option.")
+                self._pause(self._t("Unknown option.", "Невідома опція."))
 
     def _render_home(self) -> None:
         width = min(shutil.get_terminal_size((110, 30)).columns, 110)
-        title = "WGDesk Console"
+        title = self._t("WGDesk Console", "WGDesk Консоль")
         subtitle = f"{self.host.display_name} {self.host.release} | {self.host.machine}"
         rule = "═" * max(32, width - 4)
         print(self._style(f"╔{rule}╗", "ink", bold=True))
@@ -146,90 +161,92 @@ class ConsoleApp:
         settings = editable_settings_from_config(self.manager.config)
         clients = self.manager.list_clients_with_status()
         summary_lines = [
-            f"Host summary      : {self.host.summary}",
-            f"Control target    : {self.manager.control_target_summary()}",
-            f"Location          : {self.location.summary}",
-            f"Local IP          : {self.local_ip_address or 'Unavailable'}",
-            f"Public IP         : {self.location.public_ip or 'Unavailable'}",
-            f"Latitude          : {self.location.latitude_summary}",
-            f"Longitude         : {self.location.longitude_summary}",
-            f"Processor         : {self.hardware.cpu_name}",
+            f"{self._t('Host summary', 'Опис хоста'):<18}: {self.host.summary}",
+            f"{self._t('Control target', 'Ціль керування'):<18}: {self.manager.control_target_summary()}",
+            f"{self._t('Location', 'Локація'):<18}: {self.location.summary}",
+            f"{self._t('Local IP', 'Локальний IP'):<18}: {self.local_ip_address or self._t('Unavailable', 'Недоступно')}",
+            f"{self._t('Public IP', 'Публічний IP'):<18}: {self.location.public_ip or self._t('Unavailable', 'Недоступно')}",
+            f"{self._t('Latitude', 'Широта'):<18}: {self.location.latitude_summary}",
+            f"{self._t('Longitude', 'Довгота'):<18}: {self.location.longitude_summary}",
+            f"{self._t('Processor', 'Процесор'):<18}: {self.hardware.cpu_name}",
             f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
-            f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
-            f"CPU cores         : {self._cpu_cores_summary()}",
-            f"GPU cores         : {self._gpu_cores_summary()}",
-            f"Endpoint          : {settings.endpoint}",
-            f"Interface         : {settings.interface_name}",
-            f"Server subnet     : {settings.server_address}",
-            f"Service state     : {service_state}",
-            f"Total clients     : {len(clients)}",
+            f"{self._t('Storage', 'Сховище'):<18}: {format_bytes_binary(self.hardware.storage_total_bytes)}",
+            f"{self._t('CPU cores', 'Ядер CPU'):<18}: {self._cpu_cores_summary()}",
+            f"{self._t('GPU cores', 'Ядер GPU'):<18}: {self._gpu_cores_summary()}",
+            f"{self._t('Endpoint', 'Endpoint'):<18}: {settings.endpoint}",
+            f"{self._t('Interface', 'Інтерфейс'):<18}: {settings.interface_name}",
+            f"{self._t('Server subnet', 'Підмережа сервера'):<18}: {settings.server_address}",
+            f"{self._t('Service state', 'Стан сервісу'):<18}: {service_state}",
+            f"{self._t('Total clients', 'Всього клієнтів'):<18}: {len(clients)}",
             (
-                "Control available : yes"
+                f"{self._t('Control available', 'Керування доступне'):<18}: {self._t('yes', 'так')}"
                 if self.manager.can_control_vpn()
-                else "Control available : no"
+                else f"{self._t('Control available', 'Керування доступне'):<18}: {self._t('no', 'ні')}"
             ),
+            f"{self._t('Language', 'Мова'):<18}: {LANGUAGE_LABELS[self.language]}",
         ]
-        self._panel("Status", summary_lines, tone="teal")
+        self._panel(self._t("Status", "Статус"), summary_lines, tone="teal")
 
         menu_lines = [
-            "1  Dashboard",
-            "2  System info",
-            "3  Show VPN settings",
-            "4  Edit VPN settings",
-            "5  Add client",
-            "6  Disable client",
-            "7  Enable client",
-            "8  Remove client",
-            "9  List clients",
-            "10 Show client export",
-            "11 Show connected peers",
-            "12 Validate environment",
-            "13 Create backup",
-            "14 Restore backup",
-            "15 List backups",
-            "16 Show audit log",
-            "17 Import existing config",
-            "18 Configure remote SSH",
-            "19 Test remote connection",
-            "20 Clear remote profile",
-            "21 Install VPN",
-            "22 Start VPN",
-            "23 Stop VPN",
-            "24 Restart VPN",
-            "25 Open graphical interface",
-            "26 Run setup wizard",
-            "0  Exit",
+            f"1  {self._t('Dashboard', 'Дашборд')}",
+            f"2  {self._t('System info', 'Системна інформація')}",
+            f"3  {self._t('Show VPN settings', 'Показати налаштування VPN')}",
+            f"4  {self._t('Edit VPN settings', 'Редагувати налаштування VPN')}",
+            f"5  {self._t('Add client', 'Додати клієнта')}",
+            f"6  {self._t('Disable client', 'Вимкнути клієнта')}",
+            f"7  {self._t('Enable client', 'Увімкнути клієнта')}",
+            f"8  {self._t('Remove client', 'Видалити клієнта')}",
+            f"9  {self._t('List clients', 'Список клієнтів')}",
+            f"10 {self._t('Show client export', 'Показати експорт клієнта')}",
+            f"11 {self._t('Show connected peers', 'Показати підключені peer-и')}",
+            f"12 {self._t('Validate environment', 'Перевірити середовище')}",
+            f"13 {self._t('Create backup', 'Створити backup')}",
+            f"14 {self._t('Restore backup', 'Відновити backup')}",
+            f"15 {self._t('List backups', 'Список backup-ів')}",
+            f"16 {self._t('Show audit log', 'Показати аудит-лог')}",
+            f"17 {self._t('Import existing config', 'Імпортувати існуючий config')}",
+            f"18 {self._t('Configure remote SSH', 'Налаштувати remote SSH')}",
+            f"19 {self._t('Test remote connection', 'Перевірити remote-зʼєднання')}",
+            f"20 {self._t('Clear remote profile', 'Очистити remote-профіль')}",
+            f"21 {self._t('Install VPN', 'Встановити VPN')}",
+            f"22 {self._t('Start VPN', 'Запустити VPN')}",
+            f"23 {self._t('Stop VPN', 'Зупинити VPN')}",
+            f"24 {self._t('Restart VPN', 'Перезапустити VPN')}",
+            f"25 {self._t('Open graphical interface', 'Відкрити графічний інтерфейс')}",
+            f"26 {self._t('Run setup wizard', 'Запустити майстер налаштування')}",
+            f"27 {self._t('Change language', 'Змінити мову')}",
+            f"0  {self._t('Exit', 'Вихід')}",
         ]
-        self._panel("Actions", menu_lines, tone="amber")
+        self._panel(self._t("Actions", "Дії"), menu_lines, tone="amber")
 
     def _show_dashboard(self) -> None:
         clients = self.manager.list_clients_with_status()
         connected_total = sum(1 for _, is_connected in clients if is_connected)
         self._clear()
         self._panel(
-            "Dashboard",
+            self._t("Dashboard", "Дашборд"),
             [
-                f"Host platform     : {self.host.summary}",
-                f"Control target    : {self.manager.control_target_summary()}",
-                f"Location          : {self.location.summary}",
-                f"Local IP          : {self.local_ip_address or 'Unavailable'}",
-                f"Public IP         : {self.location.public_ip or 'Unavailable'}",
-                f"Latitude          : {self.location.latitude_summary}",
-                f"Longitude         : {self.location.longitude_summary}",
-                f"Processor         : {self.hardware.cpu_name}",
+                f"{self._t('Host platform', 'Платформа хоста'):<18}: {self.host.summary}",
+                f"{self._t('Control target', 'Ціль керування'):<18}: {self.manager.control_target_summary()}",
+                f"{self._t('Location', 'Локація'):<18}: {self.location.summary}",
+                f"{self._t('Local IP', 'Локальний IP'):<18}: {self.local_ip_address or self._t('Unavailable', 'Недоступно')}",
+                f"{self._t('Public IP', 'Публічний IP'):<18}: {self.location.public_ip or self._t('Unavailable', 'Недоступно')}",
+                f"{self._t('Latitude', 'Широта'):<18}: {self.location.latitude_summary}",
+                f"{self._t('Longitude', 'Довгота'):<18}: {self.location.longitude_summary}",
+                f"{self._t('Processor', 'Процесор'):<18}: {self.hardware.cpu_name}",
                 f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
-                f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
-                f"CPU cores         : {self._cpu_cores_summary()}",
-                f"GPU cores         : {self._gpu_cores_summary()}",
-                f"Service state     : {self._safe_service_state()}",
-                f"Interface         : {self.manager.config.interface_name}",
-                f"Endpoint          : {self.manager.config.endpoint}",
-                f"Server address    : {self.manager.config.server_interface}",
-                f"Public interface  : {self.manager.config.public_interface}",
-                f"Client count      : {len(clients)}",
-                f"Connected peers   : {connected_total}",
+                f"{self._t('Storage', 'Сховище'):<18}: {format_bytes_binary(self.hardware.storage_total_bytes)}",
+                f"{self._t('CPU cores', 'Ядер CPU'):<18}: {self._cpu_cores_summary()}",
+                f"{self._t('GPU cores', 'Ядер GPU'):<18}: {self._gpu_cores_summary()}",
+                f"{self._t('Service state', 'Стан сервісу'):<18}: {self._safe_service_state()}",
+                f"{self._t('Interface', 'Інтерфейс'):<18}: {self.manager.config.interface_name}",
+                f"{self._t('Endpoint', 'Endpoint'):<18}: {self.manager.config.endpoint}",
+                f"{self._t('Server address', 'Адреса сервера'):<18}: {self.manager.config.server_interface}",
+                f"{self._t('Public interface', 'Публічний інтерфейс'):<18}: {self.manager.config.public_interface}",
+                f"{self._t('Client count', 'Кількість клієнтів'):<18}: {len(clients)}",
+                f"{self._t('Connected peers', 'Підключені peer-и'):<18}: {connected_total}",
                 f"DNS               : {self.manager.config.dns}",
-                f"Allowed IPs       : {self.manager.config.client_allowed_ips}",
+                f"{self._t('Allowed IPs', 'Allowed IPs'):<18}: {self.manager.config.client_allowed_ips}",
             ],
             tone="teal",
         )
@@ -238,30 +255,30 @@ class ConsoleApp:
     def _show_system_info(self) -> None:
         self._clear()
         self._panel(
-            "System Info",
+            self._t("System Info", "Системна інформація"),
             [
-                f"Host OS           : {self.host.display_name}",
+                f"{self._t('Host OS', 'ОС хоста'):<18}: {self.host.display_name}",
                 f"System            : {self.host.system}",
-                f"Release           : {self.host.release}",
-                f"Version           : {self.host.version}",
-                f"Architecture      : {self.host.machine}",
-                f"Control target    : {self.manager.control_target_summary()}",
-                f"Location          : {self.location.summary}",
-                f"Local IP          : {self.local_ip_address or 'Unavailable'}",
-                f"Timezone          : {self.location.timezone or 'Unavailable'}",
-                f"Public IP         : {self.location.public_ip or 'Unavailable'}",
-                f"Latitude          : {self.location.latitude_summary}",
-                f"Longitude         : {self.location.longitude_summary}",
-                f"Coordinates       : {self.location.coordinates_summary}",
-                f"Processor         : {self.hardware.cpu_name}",
+                f"{self._t('Release', 'Реліз'):<18}: {self.host.release}",
+                f"{self._t('Version', 'Версія'):<18}: {self.host.version}",
+                f"{self._t('Architecture', 'Архітектура'):<18}: {self.host.machine}",
+                f"{self._t('Control target', 'Ціль керування'):<18}: {self.manager.control_target_summary()}",
+                f"{self._t('Location', 'Локація'):<18}: {self.location.summary}",
+                f"{self._t('Local IP', 'Локальний IP'):<18}: {self.local_ip_address or self._t('Unavailable', 'Недоступно')}",
+                f"{self._t('Timezone', 'Часовий пояс'):<18}: {self.location.timezone or self._t('Unavailable', 'Недоступно')}",
+                f"{self._t('Public IP', 'Публічний IP'):<18}: {self.location.public_ip or self._t('Unavailable', 'Недоступно')}",
+                f"{self._t('Latitude', 'Широта'):<18}: {self.location.latitude_summary}",
+                f"{self._t('Longitude', 'Довгота'):<18}: {self.location.longitude_summary}",
+                f"{self._t('Coordinates', 'Координати'):<18}: {self.location.coordinates_summary}",
+                f"{self._t('Processor', 'Процесор'):<18}: {self.hardware.cpu_name}",
                 f"RAM               : {format_bytes_binary(self.hardware.memory_total_bytes)}",
-                f"Storage           : {format_bytes_binary(self.hardware.storage_total_bytes)}",
-                f"CPU cores         : {self._cpu_cores_summary()}",
-                f"GPU cores         : {self._gpu_cores_summary()}",
+                f"{self._t('Storage', 'Сховище'):<18}: {format_bytes_binary(self.hardware.storage_total_bytes)}",
+                f"{self._t('CPU cores', 'Ядер CPU'):<18}: {self._cpu_cores_summary()}",
+                f"{self._t('GPU cores', 'Ядер GPU'):<18}: {self._gpu_cores_summary()}",
                 (
-                    "Control available : yes"
+                    f"{self._t('Control available', 'Керування доступне'):<18}: {self._t('yes', 'так')}"
                     if self.manager.can_control_vpn()
-                    else "Control available : no"
+                    else f"{self._t('Control available', 'Керування доступне'):<18}: {self._t('no', 'ні')}"
                 ),
             ],
             tone="mint",
@@ -646,11 +663,25 @@ class ConsoleApp:
         except VPNManagerError as exc:
             self._pause(str(exc))
             return
+        self._refresh_host_snapshot()
+        self._pause(self._t("Setup wizard completed.", "Майстер налаштування завершено."))
+
+    def _change_language(self) -> None:
+        selected = input(self._t("Choose language [uk/en]: ", "Оберіть мову [uk/en]: ")).strip().lower()
+        self.language = save_app_language(self.manager.config.project_root, selected)
+        self._pause(
+            self._t(
+                f"Language changed to {LANGUAGE_LABELS[self.language]}.",
+                f"Мову змінено на {LANGUAGE_LABELS[self.language]}.",
+            )
+        )
+
+    def _refresh_host_snapshot(self) -> None:
         self.host = detect_host_platform()
         self.hardware = detect_host_hardware()
+        detect_host_location.cache_clear()
         self.location = detect_host_location()
         self.local_ip_address = detect_local_ip_address()
-        self._pause("Setup wizard completed.")
 
     def _safe_service_state(self) -> str:
         if not self.manager.can_control_vpn():
@@ -714,7 +745,7 @@ class ConsoleApp:
     def _pause(self, message: str | None = None) -> None:
         if message:
             self._print_message(message, tone="amber")
-        input("\nPress Enter to continue...")
+        input(self._t("\nPress Enter to continue...", "\nНатисніть Enter, щоб продовжити..."))
 
     def _print_message(self, message: str, *, tone: str) -> None:
         print()
@@ -730,8 +761,9 @@ def run_console_app(
     manager: WireGuardManager,
     *,
     open_gui_callback: Callable[[], int] | None = None,
+    language: str = "uk",
 ) -> int:
     """Run the modern terminal interface."""
 
-    app = ConsoleApp(manager, open_gui_callback=open_gui_callback)
+    app = ConsoleApp(manager, open_gui_callback=open_gui_callback, language=language)
     return app.run()
